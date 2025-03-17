@@ -4,6 +4,10 @@ from PIL import Image
 import argparse
 import os
 import json
+import pytesseract
+
+# Set Tesseract executable path for Windows
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 def preprocess_image(image):
     # Convert to grayscale
@@ -83,6 +87,17 @@ def check_for_signature(image, x, y, w, h):
         "pixel_density": round(pixel_density, 4)
     }
 
+def extract_text_from_cell(image, x, y, w, h):
+    # Extract the cell region
+    cell_region = image[y:y+h, x:x+w]
+    
+    # Convert to PIL Image for better OCR
+    cell_pil = Image.fromarray(cv2.cvtColor(cell_region, cv2.COLOR_BGR2RGB))
+    
+    # Use tesseract to extract text
+    text = pytesseract.image_to_string(cell_pil, config='--psm 6').strip()
+    return text
+
 def detect_table_and_cells(image_path):
     # Read the image
     image = cv2.imread(image_path)
@@ -105,7 +120,7 @@ def detect_table_and_cells(image_path):
     
     # Initialize results dictionary
     results = {
-        "rows": []
+        "rows": {}  # Changed to dictionary for better name association
     }
     
     # Detect horizontal lines with varying kernel sizes
@@ -255,6 +270,28 @@ def detect_table_and_cells(image_path):
                     second_column = sorted_columns[1][1]
                     print(f"Highlighting {len(second_column)-1} cells in the second column (excluding header)")
                     highlight_column(second_column, (255, 0, 0))  # Blue for second column
+                    
+                    # Sort cells by y-coordinate (top to bottom)
+                    sorted_cells = sorted(second_column, key=lambda cell: cell[1])
+                    
+                    # Extract student names (skip header)
+                    print("\nStudent Names:")
+                    print("-" * 20)
+                    # Store names for later use
+                    student_names = {}
+                    for i, cell in enumerate(sorted_cells[1:], 1):
+                        cell_x, cell_y, cell_w, cell_h = cell
+                        name = extract_text_from_cell(
+                            image,
+                            x + cell_x,
+                            y + cell_y,
+                            cell_w,
+                            cell_h
+                        )
+                        if name:  # Only store if we found text
+                            student_names[i] = name.replace('\n', ' ').strip()
+                        print(f"{i}. {student_names[i]}")
+                    print("-" * 20)
                 
                 # Process and highlight the last column if it exists
                 if len(sorted_columns) > 0:
@@ -277,12 +314,13 @@ def detect_table_and_cells(image_path):
                         )
                         
                         # Add result to the dictionary
-                        results["rows"].append({
+                        results["rows"][str(i)] = {
+                            "student_name": student_names.get(i, "Unknown"),
                             "row_number": i,
                             "has_signature": signature_info["has_content"],
                             "confidence": signature_info["confidence"],
                             "pixel_density": signature_info["pixel_density"]
-                        })
+                        }
                         
                         # Print debug information
                         print(f"Row {i}: {'Signed' if signature_info['has_content'] else 'Empty'} "
