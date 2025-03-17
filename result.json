@@ -1,0 +1,124 @@
+{
+  "rows": [
+    {
+      "row_number": 1,
+      "has_signature": false,
+      "confidence": 0.9,
+      "pixel_density": 0.0
+    },
+    {
+      "row_number": 2,
+      "has_signature": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0265
+    },
+    {
+      "row_number": 3,
+      "has_signature": false,
+      "confidence": 0.9,
+      "pixel_density": 0.0
+    },
+    {
+      "row_number": 4,
+      "has_signature": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0226
+    },
+    {
+      "row_number": 5,
+      "has_signature": true,
+      "confidence": 0.52,
+      "pixel_density": 0.0193
+    },
+    {
+      "row_number": 6,
+      "has_signature": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0372
+    },
+    {
+      "row_number": 7,
+      "has_signature": true,
+      "confidence": 0.9,
+      "pixel_density": 0.024
+    },
+    {
+      "row_number": 8,
+      "has_signature": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0488
+    },
+    {
+      "row_number": 9,
+      "has_signature": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0373
+    },
+    {
+      "row_number": 10,
+      "has_signature": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0438
+    },
+    {
+      "row_number": 11,
+      "has_signature": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0396
+    },
+    {
+      "row_number": 12,
+      "has_signature": false,
+      "confidence": 0.9,
+      "pixel_density": 0.0011
+    },
+    {
+      "row_number": 13,
+      "has_signature": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0533
+    },
+    {
+      "row_number": 14,
+      "has_signature": false,
+      "confidence": 0.9,
+      "pixel_density": 0.0
+    },
+    {
+      "row_number": 15,
+      "has_signature": true,
+      "confidence": 0.9,
+      "pixel_density": 0.1023
+    },
+    {
+      "row_number": 16,
+      "has_signature": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0474
+    },
+    {
+      "row_number": 17,
+      "has_signature": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0624
+    },
+    {
+      "row_number": 18,
+      "has_signature": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0503
+    },
+    {
+      "row_number": 19,
+      "has_signature": true,
+      "confidence": 0.9,
+      "pixel_density": 0.066
+    },
+    {
+      "row_number": 20,
+      "has_signature": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0563
+    }
+  ]
+}
