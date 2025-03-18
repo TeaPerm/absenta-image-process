@@ -94,7 +94,7 @@ def extract_text_from_cell(image, x, y, w, h):
     # Convert to PIL Image for better OCR
     cell_pil = Image.fromarray(cv2.cvtColor(cell_region, cv2.COLOR_BGR2RGB))
     
-    # Use tesseract to extract text
+    # Use tesseract to extract text 
     text = pytesseract.image_to_string(cell_pil, config='--psm 6').strip()
     return text
 
@@ -236,13 +236,13 @@ def detect_table_and_cells(image_path):
                 sorted_columns = sorted(columns.items(), key=lambda x: x[0])
                 print(f"Found {len(sorted_columns)} columns")
                 
-                # Draw all cells in light gray
+                # Draw all cells in light yellow
                 for cell in valid_cells:
                     cell_x, cell_y, cell_w, cell_h = cell
                     cv2.rectangle(output_image, 
                                 (x + cell_x, y + cell_y), 
                                 (x + cell_x + cell_w, y + cell_y + cell_h), 
-                                (200, 200, 200), 1)
+                                (102, 255, 255), 1)  # Light yellow in BGR format
                 
                 # Function to highlight a column with a specific color
                 def highlight_column(column_cells, color):
