@@ -5,9 +5,35 @@ import argparse
 import os
 import json
 import pytesseract
+from difflib import SequenceMatcher
 
 # Set Tesseract executable path for Windows
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
+# Create debug folder if it doesn't exist
+DEBUG_FOLDER = 'debug'
+if not os.path.exists(DEBUG_FOLDER):
+    os.makedirs(DEBUG_FOLDER)
+
+def string_similarity(a, b):
+    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
+def find_matching_name(table_name, name_list, threshold=0.6):  # Lowered threshold for better matching
+    best_match = None
+    best_ratio = 0
+    
+    # Clean the table name
+    table_name = clean_extracted_name(table_name)
+    
+    for name in name_list:
+        # Clean the name from the list
+        clean_name = clean_extracted_name(name)
+        ratio = string_similarity(table_name, clean_name)
+        if ratio > best_ratio and ratio >= threshold:
+            best_ratio = ratio
+            best_match = name  # Return the original name from the list
+    
+    return best_match
 
 def preprocess_image(image):
     # Convert to grayscale
@@ -87,6 +113,29 @@ def check_for_signature(image, x, y, w, h):
         "pixel_density": round(pixel_density, 4)
     }
 
+def clean_extracted_name(text):
+    # Remove any numbers and special characters
+    text = ''.join(c for c in text if not c.isdigit())
+    
+    # Remove common unwanted text
+    text = text.replace('|', '').replace('eet', '').replace('EET', '')
+    text = text.replace('YOXAFO', '').replace('GOSBOX', '').replace('RATAN', '')
+    text = text.replace('SXY™XH', '').replace('SY)', '')
+    
+    # Remove any extra whitespace
+    text = ' '.join(text.split())
+    
+    # Remove any trailing/leading special characters
+    text = text.strip('|,.-_ ')
+    
+    # Remove any remaining non-letter characters except spaces
+    text = ''.join(c for c in text if c.isalpha() or c.isspace())
+    
+    # Clean up any double spaces
+    text = ' '.join(text.split())
+    
+    return text
+
 def extract_text_from_cell(image, x, y, w, h):
     # Extract the cell region
     cell_region = image[y:y+h, x:x+w]
@@ -96,9 +145,9 @@ def extract_text_from_cell(image, x, y, w, h):
     
     # Use tesseract to extract text 
     text = pytesseract.image_to_string(cell_pil, config='--psm 6').strip()
-    return text
+    return clean_extracted_name(text)
 
-def detect_table_and_cells(image_path):
+def detect_table_and_cells(image_path, name_list=None):
     # Read the image
     image = cv2.imread(image_path)
     if image is None:
@@ -115,12 +164,12 @@ def detect_table_and_cells(image_path):
     print(f"Image dimensions: {width}x{height}")
     
     # Save preprocessed image for debugging
-    cv2.imwrite('debug_preprocessed.jpg', thresh)
-    print("Saved preprocessed image as debug_preprocessed.jpg")
+    cv2.imwrite(os.path.join(DEBUG_FOLDER, 'preprocessed.jpg'), thresh)
+    print(f"Saved preprocessed image as {os.path.join(DEBUG_FOLDER, 'preprocessed.jpg')}")
     
     # Initialize results dictionary
     results = {
-        "rows": {}  # Changed to dictionary for better name association
+        "students": []  # Changed to list for cleaner output
     }
     
     # Detect horizontal lines with varying kernel sizes
@@ -145,8 +194,8 @@ def detect_table_and_cells(image_path):
     table_mask = cv2.morphologyEx(table_mask, cv2.MORPH_CLOSE, kernel)
     
     # Save table mask for debugging
-    cv2.imwrite('debug_table_mask.jpg', table_mask)
-    print("Saved table mask as debug_table_mask.jpg")
+    cv2.imwrite(os.path.join(DEBUG_FOLDER, 'table_mask.jpg'), table_mask)
+    print(f"Saved table mask as {os.path.join(DEBUG_FOLDER, 'table_mask.jpg')}")
     
     # Find contours
     contours, _ = cv2.findContours(table_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -174,8 +223,8 @@ def detect_table_and_cells(image_path):
             table_region = thresh[y:y+h, x:x+w]
             
             # Save table region for debugging
-            cv2.imwrite('debug_table_region.jpg', table_region)
-            print("Saved table region as debug_table_region.jpg")
+            cv2.imwrite(os.path.join(DEBUG_FOLDER, 'table_region.jpg'), table_region)
+            print(f"Saved table region as {os.path.join(DEBUG_FOLDER, 'table_region.jpg')}")
             
             # Extract the table mask region
             table_mask_region = table_mask[y:y+h, x:x+w]
@@ -289,8 +338,18 @@ def detect_table_and_cells(image_path):
                             cell_h
                         )
                         if name:  # Only store if we found text
-                            student_names[i] = name.replace('\n', ' ').strip()
-                        print(f"{i}. {student_names[i]}")
+                            if name_list:
+                                # Try to match with provided name list
+                                matched_name = find_matching_name(name, name_list)
+                                if matched_name:
+                                    student_names[i] = matched_name
+                                    print(f"{i}. {name} -> {matched_name}")  # Show the replacement
+                                else:
+                                    student_names[i] = name
+                                    print(f"{i}. {name} (no match found)")
+                            else:
+                                student_names[i] = name
+                                print(f"{i}. {name}")
                     print("-" * 20)
                 
                 # Process and highlight the last column if it exists
@@ -314,13 +373,12 @@ def detect_table_and_cells(image_path):
                         )
                         
                         # Add result to the dictionary
-                        results["rows"][str(i)] = {
-                            "student_name": student_names.get(i, "Unknown"),
-                            "row_number": i,
-                            "has_signature": signature_info["has_content"],
+                        results["students"].append({
+                            "name": student_names.get(i, "Unknown"),
+                            "has_signed": signature_info["has_content"],
                             "confidence": signature_info["confidence"],
                             "pixel_density": signature_info["pixel_density"]
-                        }
+                        })
                         
                         # Print debug information
                         print(f"Row {i}: {'Signed' if signature_info['has_content'] else 'Empty'} "
@@ -328,25 +386,45 @@ def detect_table_and_cells(image_path):
                               f"Density: {signature_info['pixel_density']:.4f})")
 
     # Save to a fixed output file
-    output_path = 'output_table.jpg'
+    output_path = os.path.join(DEBUG_FOLDER, 'output_table.jpg')
     cv2.imwrite(output_path, output_image)
     print(f"Processed image saved as: {output_path}")
     
     # Save results to JSON file
-    with open('result.json', 'w') as f:
-        json.dump(results, f, indent=2)
+    with open('result.json', 'w', encoding='utf-8') as f:
+        json.dump(results, f, indent=2, ensure_ascii=False)
     print("Results saved to result.json")
 
     return output_image
+
+def read_names_from_file(file_path):
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            # Read lines and remove empty lines and whitespace
+            names = [line.strip() for line in f.readlines() if line.strip()]
+        return names
+    except Exception as e:
+        print(f"Error reading names file: {str(e)}")
+        return None
 
 if __name__ == "__main__":
     # Set up argument parser
     parser = argparse.ArgumentParser(description='Detect tables and cells in an image')
     parser.add_argument('image_path', help='Path to the input image')
+    parser.add_argument('--names_file', help='Path to text file containing names (one per line)')
     args = parser.parse_args()
 
     try:
-        result = detect_table_and_cells(args.image_path)
+        # Read names from file if provided
+        name_list = None
+        if args.names_file:
+            name_list = read_names_from_file(args.names_file)
+            if name_list:
+                print(f"Loaded {len(name_list)} names from file")
+            else:
+                print("No names loaded from file, proceeding without name matching")
+        
+        result = detect_table_and_cells(args.image_path, name_list)
         print("Table and cell detection completed successfully!")
     except Exception as e:
         print(f"An error occurred: {str(e)}") 

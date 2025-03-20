@@ -51,14 +51,23 @@ def process_table():
         if not allowed_file(file.filename):
             return jsonify({'error': 'File type not allowed'}), 400
             
+        # Get the name list from the request
+        name_list = None
+        if 'names' in request.form:
+            try:
+                name_list = json.loads(request.form['names'])
+                print(f"Received {len(name_list)} names")  # Debug print
+            except json.JSONDecodeError:
+                return jsonify({'error': 'Invalid names format'}), 400
+            
         # Save the uploaded file
         filename = secure_filename(file.filename)
         filepath = os.path.join(UPLOAD_FOLDER, filename)
         file.save(filepath)
         print(f"Saved file to: {filepath}")  # Debug print
         
-        # Process the image
-        detect_table_and_cells(filepath)
+        # Process the image with the name list
+        detect_table_and_cells(filepath, name_list)
         print("Image processed successfully")  # Debug print
         
         # Read and return only the results from result.json

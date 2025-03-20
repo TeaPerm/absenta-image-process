@@ -1,144 +1,124 @@
 {
-  "rows": {
-    "1": {
-      "student_name": "Abrisin Alen . 72379755905 YOXAFO",
-      "row_number": 1,
-      "has_signature": false,
+  "students": [
+    {
+      "name": "Abrisin Alen",
+      "has_signed": false,
       "confidence": 0.9,
       "pixel_density": 0.0
     },
-    "2": {
-      "student_name": "Boros Botond 72167624048 OP6NB3",
-      "row_number": 2,
-      "has_signature": true,
+    {
+      "name": "Boros Botond",
+      "has_signed": true,
       "confidence": 0.67,
       "pixel_density": 0.0096
     },
-    "3": {
-      "student_name": "Consuegra-Sotolongo Gabor Luis PGOX1H 72362382306",
-      "row_number": 3,
-      "has_signature": false,
+    {
+      "name": "Consuegra-Sotolongo Gábor Luis",
+      "has_signed": false,
       "confidence": 0.9,
       "pixel_density": 0.0
     },
-    "4": {
-      "student_name": "Csontos David Ferenc czavas 72354609110",
-      "row_number": 4,
-      "has_signature": true,
+    {
+      "name": "Csontos Dávid Ferenc",
+      "has_signed": true,
       "confidence": 0.69,
       "pixel_density": 0.0115
     },
-    "5": {
-      "student_name": "Dancs Korn\u00e9l 71762306964 emey",
-      "row_number": 5,
-      "has_signature": true,
+    {
+      "name": "Dancs Kornél",
+      "has_signed": true,
       "confidence": 0.66,
       "pixel_density": 0.0093
     },
-    "6": {
-      "student_name": "Ferenczy Kata Boglarka GOSBOX 77911690639",
-      "row_number": 6,
-      "has_signature": true,
+    {
+      "name": "Ferenczy Kata",
+      "has_signed": true,
       "confidence": 0.9,
       "pixel_density": 0.0258
     },
-    "7": {
-      "student_name": "\u2018Gombos Vidor Marton | 44. 72355441917 eet",
-      "row_number": 7,
-      "has_signature": true,
+    {
+      "name": "Gombos Vidor Márton",
+      "has_signed": true,
       "confidence": 0.67,
       "pixel_density": 0.0125
     },
-    "8": {
-      "student_name": "Hanyecz Rebeka a 72343978519 ales)",
-      "row_number": 8,
-      "has_signature": true,
+    {
+      "name": "Hanyecz Rebeka",
+      "has_signed": true,
       "confidence": 0.9,
       "pixel_density": 0.0295
     },
-    "9": {
-      "student_name": "Kelemen Kevin Tamas MBE643 71627304411",
-      "row_number": 9,
-      "has_signature": true,
+    {
+      "name": "Kelemen Kevin Tamás",
+      "has_signed": true,
       "confidence": 0.9,
       "pixel_density": 0.0265
     },
-    "10": {
-      "student_name": "Le Thien Nam 72362985374 edie)",
-      "row_number": 10,
-      "has_signature": true,
+    {
+      "name": "Le Thien Nam",
+      "has_signed": true,
       "confidence": 0.9,
       "pixel_density": 0.0363
     },
-    "11": {
-      "student_name": "Mag6 Szaboics 77639907901 Tet",
-      "row_number": 11,
-      "has_signature": true,
+    {
+      "name": "Mágó Szabolcs",
+      "has_signed": true,
       "confidence": 0.9,
       "pixel_density": 0.0297
     },
-    "12": {
-      "student_name": "N\u00e9meth David 72338172323 EePEet",
-      "row_number": 12,
-      "has_signature": false,
+    {
+      "name": "Németh Dávid",
+      "has_signed": false,
       "confidence": 0.9,
       "pixel_density": 0.0
     },
-    "13": {
-      "student_name": "P\u00e9ter David 7 72374036829 bes caie",
-      "row_number": 13,
-      "has_signature": true,
+    {
+      "name": "Péter Dávid",
+      "has_signed": true,
       "confidence": 0.9,
       "pixel_density": 0.0372
     },
-    "14": {
-      "student_name": "Rakonczai Soma 72363044045 PABNAD.",
-      "row_number": 14,
-      "has_signature": false,
+    {
+      "name": "Rakonczai Soma",
+      "has_signed": false,
       "confidence": 0.9,
       "pixel_density": 0.0
     },
-    "15": {
-      "student_name": "Simon Erhard Raffael \u00ab| 73974206266 SY)",
-      "row_number": 15,
-      "has_signature": true,
+    {
+      "name": "Simon Raffael",
+      "has_signed": true,
       "confidence": 0.9,
       "pixel_density": 0.0729
     },
-    "16": {
-      "student_name": "Takacs Mat\u00e9 72182652538 Wine",
-      "row_number": 16,
-      "has_signature": true,
+    {
+      "name": "Takács Máté",
+      "has_signed": true,
       "confidence": 0.9,
       "pixel_density": 0.0298
     },
-    "17": {
-      "student_name": "Toth izabella 72370432752 RATAN",
-      "row_number": 17,
-      "has_signature": true,
+    {
+      "name": "Tóth Izabella",
+      "has_signed": true,
       "confidence": 0.9,
       "pixel_density": 0.0486
     },
-    "18": {
-      "student_name": "Toth Levente i+ 72359970772 bie! ii",
-      "row_number": 18,
-      "has_signature": true,
+    {
+      "name": "Tóth Levente",
+      "has_signed": true,
       "confidence": 0.9,
       "pixel_density": 0.0339
     },
-    "19": {
-      "student_name": "Tbrbk Balint Bence A. 77984369932 ena,",
-      "row_number": 19,
-      "has_signature": true,
+    {
+      "name": "Török Bálint Bence",
+      "has_signed": true,
       "confidence": 0.9,
       "pixel_density": 0.043
     },
-    "20": {
-      "student_name": "Vatai Domonkos 7a5a3ae551 _-__ SXY\u2122XH",
-      "row_number": 20,
-      "has_signature": true,
+    {
+      "name": "Valtai Domonkos",
+      "has_signed": true,
       "confidence": 0.9,
       "pixel_density": 0.0384
     }
-  }
+  ]
 }
