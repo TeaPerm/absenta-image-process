@@ -313,6 +313,28 @@ def detect_table_and_cells(image_path, name_list=None):
                                     (x + cell_x + cell_w, y + cell_y + cell_h), 
                                     color, -1)
                         cv2.addWeighted(overlay, 0.2, output_image, 0.8, 0, output_image)
+
+                        # For the last column (signature column), add text annotation
+                        if color == (0, 0, 255):  # Red color = signature column
+                            signature_info = check_for_signature(
+                                image,
+                                x + cell_x,
+                                y + cell_y,
+                                cell_w,
+                                cell_h
+                            )
+                            # Add text annotation with color based on signature status
+                            text = "Signed" if signature_info["has_content"] else "Empty"
+                            text_color = (0, 255, 0) if signature_info["has_content"] else (0, 0, 255)  # Green for signed, Red for empty
+                            text_x = x + cell_x + cell_w + 5  # 5 pixels padding
+                            text_y = y + cell_y + cell_h // 2  # Vertically centered
+                            
+                            # Add black outline for better visibility
+                            cv2.putText(output_image, text, (text_x, text_y), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)  # Black outline
+                            # Add colored text
+                            cv2.putText(output_image, text, (text_x, text_y), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, text_color, 1)  # Colored text overlay
                 
                 # Highlight the second column if it exists
                 if len(sorted_columns) > 1:
@@ -374,6 +396,7 @@ def detect_table_and_cells(image_path, name_list=None):
                         
                         # Add result to the dictionary
                         results["students"].append({
+                            "row_number": i,  # Add row number to results
                             "name": student_names.get(i, "Unknown"),
                             "has_signed": signature_info["has_content"],
                             "confidence": signature_info["confidence"],
