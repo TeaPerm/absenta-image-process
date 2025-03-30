@@ -1,3 +1,144 @@
 {
-  "students": []
+  "students": [
+    {
+      "row_number": 1,
+      "name": "Abrisin Alen",
+      "has_signed": false,
+      "confidence": 0.9,
+      "pixel_density": 0.0
+    },
+    {
+      "row_number": 2,
+      "name": "Boros Botond",
+      "has_signed": true,
+      "confidence": 0.67,
+      "pixel_density": 0.0096
+    },
+    {
+      "row_number": 3,
+      "name": "Consuegra-Sotolongo Gábor Luis",
+      "has_signed": false,
+      "confidence": 0.9,
+      "pixel_density": 0.0
+    },
+    {
+      "row_number": 4,
+      "name": "Csontos Dávid Ferenc",
+      "has_signed": true,
+      "confidence": 0.69,
+      "pixel_density": 0.0115
+    },
+    {
+      "row_number": 5,
+      "name": "Dancs Kornél",
+      "has_signed": true,
+      "confidence": 0.66,
+      "pixel_density": 0.0093
+    },
+    {
+      "row_number": 6,
+      "name": "Ferenczy Kata",
+      "has_signed": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0258
+    },
+    {
+      "row_number": 7,
+      "name": "Gombos Vidor Márton",
+      "has_signed": true,
+      "confidence": 0.67,
+      "pixel_density": 0.0125
+    },
+    {
+      "row_number": 8,
+      "name": "Hanyecz Rebeka",
+      "has_signed": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0295
+    },
+    {
+      "row_number": 9,
+      "name": "Kelemen Kevin Tamás",
+      "has_signed": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0265
+    },
+    {
+      "row_number": 10,
+      "name": "Le Thien Nam",
+      "has_signed": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0363
+    },
+    {
+      "row_number": 11,
+      "name": "Mágó Szabolcs",
+      "has_signed": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0297
+    },
+    {
+      "row_number": 12,
+      "name": "Németh Dávid",
+      "has_signed": false,
+      "confidence": 0.9,
+      "pixel_density": 0.0
+    },
+    {
+      "row_number": 13,
+      "name": "Péter Dávid",
+      "has_signed": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0372
+    },
+    {
+      "row_number": 14,
+      "name": "Rakonczai Soma",
+      "has_signed": false,
+      "confidence": 0.9,
+      "pixel_density": 0.0
+    },
+    {
+      "row_number": 15,
+      "name": "Simon Raffael",
+      "has_signed": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0729
+    },
+    {
+      "row_number": 16,
+      "name": "Takács Máté",
+      "has_signed": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0298
+    },
+    {
+      "row_number": 17,
+      "name": "Tóth Izabella",
+      "has_signed": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0486
+    },
+    {
+      "row_number": 18,
+      "name": "Tóth Levente",
+      "has_signed": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0339
+    },
+    {
+      "row_number": 19,
+      "name": "Török Bálint Bence",
+      "has_signed": true,
+      "confidence": 0.9,
+      "pixel_density": 0.043
+    },
+    {
+      "row_number": 20,
+      "name": "Valtai Domonkos",
+      "has_signed": true,
+      "confidence": 0.9,
+      "pixel_density": 0.0384
+    }
+  ]
 }

@@ -15,10 +15,49 @@ DEBUG_FOLDER = 'debug'
 if not os.path.exists(DEBUG_FOLDER):
     os.makedirs(DEBUG_FOLDER)
 
+# Configuration constants
+CONFIG = {
+    # String similarity matching
+    'NAME_MATCH_THRESHOLD': 0.5,  # Threshold for string similarity matching
+    
+    # Image preprocessing
+    'BILATERAL_FILTER_D': 11,     # Diameter of each pixel neighborhood
+    'BILATERAL_FILTER_SIGMA_COLOR': 17,  # Filter sigma in the color space
+    'BILATERAL_FILTER_SIGMA_SPACE': 17,  # Filter sigma in the coordinate space
+    'ADAPTIVE_THRESH_BLOCK_SIZE': 15,    # Block size for adaptive thresholding
+    'ADAPTIVE_THRESH_C': 5,       # Constant subtracted from the mean
+    'MORPH_KERNEL_SIZE': (2, 2),  # Kernel size for morphological operations
+    
+    # Signature detection
+    'BORDER_WIDTH': 5,            # Border width to ignore in signature detection
+    'INK_CONTENT_THRESHOLD': 0.005,  # Threshold for determining if cell has ink content
+    'EMPTY_CELL_THRESHOLD': 0.002,   # Threshold for determining if cell is empty
+    'HIGH_INK_THRESHOLD': 0.02,      # Threshold for high ink content
+    
+    # Table detection
+    'HORIZONTAL_KERNEL_SIZES': [20, 30, 40],  # Kernel sizes for horizontal line detection
+    'VERTICAL_KERNEL_SIZES': [20, 30, 40],    # Kernel sizes for vertical line detection
+    'TABLE_MIN_WIDTH_FACTOR': 0.05,    # Minimum table width as factor of image width
+    'TABLE_MIN_HEIGHT_FACTOR': 0.05,   # Minimum table height as factor of image height
+    'TABLE_EDGE_MARGIN': 5,            # Minimum distance from table to image edge
+    
+    # Cell detection
+    'MIN_CELL_AREA_FACTOR': 0.005,     # Minimum cell area as percentage of table area
+    'MIN_CELL_WIDTH': 5,               # Minimum cell width in pixels
+    'MIN_CELL_HEIGHT': 5,              # Minimum cell height in pixels
+    'COLUMN_X_TOLERANCE_FACTOR': 0.01, # X-coordinate tolerance for column grouping as factor of table width
+    
+    # Visualization
+    'OVERLAY_ALPHA': 0.2,              # Alpha transparency for cell highlighting
+    'TEXT_SCALE': 0.7,                 # Scale for column number text
+    'TEXT_THICKNESS': 2,               # Thickness for text outline
+    'SIGNATURE_TEXT_SCALE': 0.5,       # Scale for signature status text
+}
+
 def string_similarity(a, b):
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
-def find_matching_name(table_name, name_list, threshold=0.6):  # Lowered threshold for better matching
+def find_matching_name(table_name, name_list, threshold=CONFIG['NAME_MATCH_THRESHOLD']):
     best_match = None
     best_ratio = 0
     
@@ -40,16 +79,23 @@ def preprocess_image(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     
     # Apply bilateral filter to remove noise while preserving edges
-    gray = cv2.bilateralFilter(gray, 11, 17, 17)
+    gray = cv2.bilateralFilter(
+        gray, 
+        CONFIG['BILATERAL_FILTER_D'], 
+        CONFIG['BILATERAL_FILTER_SIGMA_COLOR'], 
+        CONFIG['BILATERAL_FILTER_SIGMA_SPACE']
+    )
     
     # Apply adaptive thresholding with more aggressive parameters
     thresh = cv2.adaptiveThreshold(
         gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-        cv2.THRESH_BINARY_INV, 15, 5  # Increased block size and constant
+        cv2.THRESH_BINARY_INV, 
+        CONFIG['ADAPTIVE_THRESH_BLOCK_SIZE'], 
+        CONFIG['ADAPTIVE_THRESH_C']
     )
     
     # Remove small noise
-    kernel = np.ones((2,2), np.uint8)
+    kernel = np.ones(CONFIG['MORPH_KERNEL_SIZE'], np.uint8)
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
     
     return thresh
@@ -75,9 +121,9 @@ def check_for_signature(image, x, y, w, h):
     # Combine blue and black masks
     ink_mask = cv2.bitwise_or(blue_mask, black_mask)
     
-    # Create a mask to ignore the cell borders (5 pixels from each edge)
+    # Create a mask to ignore the cell borders
     border_mask = np.ones_like(ink_mask)
-    border_width = 5
+    border_width = CONFIG['BORDER_WIDTH']
     border_mask[0:border_width, :] = 0  # Top border
     border_mask[-border_width:, :] = 0  # Bottom border
     border_mask[:, 0:border_width] = 0  # Left border
@@ -91,19 +137,21 @@ def check_for_signature(image, x, y, w, h):
     total_pixels = np.count_nonzero(border_mask)
     pixel_density = ink_pixels / total_pixels if total_pixels > 0 else 0
     
-    # Lower threshold for ink detection since we're more specific now
-    content_threshold = 0.005  # 0.5% of pixels need to be ink colored
+    # Get thresholds from config
+    content_threshold = CONFIG['INK_CONTENT_THRESHOLD']
+    empty_threshold = CONFIG['EMPTY_CELL_THRESHOLD']
+    high_ink_threshold = CONFIG['HIGH_INK_THRESHOLD']
     
     # Calculate confidence level based on pixel density
-    if pixel_density < 0.002:  # Very few ink pixels
+    if pixel_density < empty_threshold:  # Very few ink pixels
         confidence = 0.9  # Very confident it's empty
-    elif pixel_density > 0.02:  # Lots of ink pixels
+    elif pixel_density > high_ink_threshold:  # Lots of ink pixels
         confidence = 0.9  # Very confident it has content
     else:
         # For densities in between, confidence scales with distance from thresholds
         confidence = 0.5 + min(
-            abs(pixel_density - 0.002) / 0.018,  # Distance from empty threshold
-            abs(pixel_density - 0.02) / 0.018    # Distance from content threshold
+            abs(pixel_density - empty_threshold) / (high_ink_threshold - empty_threshold),
+            abs(pixel_density - high_ink_threshold) / (high_ink_threshold - empty_threshold)
         ) * 0.4
     
     # Consider it signed if more than threshold of pixels are ink colored
@@ -114,25 +162,23 @@ def check_for_signature(image, x, y, w, h):
     }
 
 def clean_extracted_name(text):
-    # Remove any numbers and special characters
+    # More aggressive cleaning
+    # Remove common OCR artifacts and unwanted patterns
+    text = text.replace('|', '').replace('\\', '').replace('/', '')
+    text = text.replace('_', '').replace('=', '').replace('+', '')
+    
+    # Remove any numbers
     text = ''.join(c for c in text if not c.isdigit())
     
-    # Remove common unwanted text
-    text = text.replace('|', '').replace('eet', '').replace('EET', '')
-    text = text.replace('YOXAFO', '').replace('GOSBOX', '').replace('RATAN', '')
-    text = text.replace('SXY™XH', '').replace('SY)', '')
+    # Remove any symbols except letters, spaces, dots, and hyphens
+    text = ''.join(c for c in text if c.isalpha() or c.isspace() or c in '.-')
     
-    # Remove any extra whitespace
+    # Clean up multiple spaces, dots, and hyphens
     text = ' '.join(text.split())
+    text = text.strip('.-_ ')
     
-    # Remove any trailing/leading special characters
-    text = text.strip('|,.-_ ')
-    
-    # Remove any remaining non-letter characters except spaces
-    text = ''.join(c for c in text if c.isalpha() or c.isspace())
-    
-    # Clean up any double spaces
-    text = ' '.join(text.split())
+    # Remove very short segments (likely noise)
+    text = ' '.join(word for word in text.split() if len(word) > 1)
     
     return text
 
@@ -174,14 +220,14 @@ def detect_table_and_cells(image_path, name_list=None):
     
     # Detect horizontal lines with varying kernel sizes
     horizontal_lines = np.zeros_like(thresh)
-    for kernel_size in [20, 30, 40]:  # Reduced kernel sizes for finer detection
+    for kernel_size in CONFIG['HORIZONTAL_KERNEL_SIZES']:
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, 1))
         lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
         horizontal_lines = cv2.bitwise_or(horizontal_lines, lines)
 
     # Detect vertical lines with varying kernel sizes
     vertical_lines = np.zeros_like(thresh)
-    for kernel_size in [20, 30, 40]:  # Reduced kernel sizes for finer detection
+    for kernel_size in CONFIG['VERTICAL_KERNEL_SIZES']:
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, kernel_size))
         lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
         vertical_lines = cv2.bitwise_or(vertical_lines, lines)
@@ -209,10 +255,15 @@ def detect_table_and_cells(image_path, name_list=None):
         # Get the bounding rectangle
         x, y, w, h = cv2.boundingRect(contour)
         
-        # More lenient filtering for table detection
-        if (w > width * 0.05 and h > height * 0.05 and  # Reduced minimum size requirements
-            x > 5 and y > 5 and  # Reduced edge distance requirements
-            x + w < width - 5 and y + h < height - 5):
+        # Get table detection parameters from config
+        min_width = width * CONFIG['TABLE_MIN_WIDTH_FACTOR']
+        min_height = height * CONFIG['TABLE_MIN_HEIGHT_FACTOR']
+        edge_margin = CONFIG['TABLE_EDGE_MARGIN']
+        
+        # Filter tables based on size and position
+        if (w > min_width and h > min_height and
+            x > edge_margin and y > edge_margin and
+            x + w < width - edge_margin and y + h < height - edge_margin):
             
             print(f"Processing table at position ({x}, {y}) with size {w}x{h}")
             
@@ -239,7 +290,9 @@ def detect_table_and_cells(image_path, name_list=None):
             
             # Find all valid cells
             valid_cells = []
-            min_cell_area = (w * h) * 0.001  # Minimum cell area as 0.1% of table area
+            min_cell_area = (w * h) * CONFIG['MIN_CELL_AREA_FACTOR']
+            min_cell_width = CONFIG['MIN_CELL_WIDTH']
+            min_cell_height = CONFIG['MIN_CELL_HEIGHT']
             
             for cell_contour in cell_contours:
                 area = cv2.contourArea(cell_contour)
@@ -249,7 +302,7 @@ def detect_table_and_cells(image_path, name_list=None):
                 cell_x, cell_y, cell_w, cell_h = cv2.boundingRect(cell_contour)
                 
                 # Basic size and position checks
-                if (cell_w > 5 and cell_h > 5 and  # Minimum size in pixels
+                if (cell_w > min_cell_width and cell_h > min_cell_height and
                     cell_x >= 0 and cell_y >= 0 and 
                     cell_x + cell_w <= w and cell_y + cell_h <= h):
                     valid_cells.append((cell_x, cell_y, cell_w, cell_h))
@@ -267,7 +320,7 @@ def detect_table_and_cells(image_path, name_list=None):
                 
                 # Group cells by x-coordinate to identify columns
                 columns = {}
-                tolerance = table_width * 0.01  # 1% of table width
+                tolerance = table_width * CONFIG['COLUMN_X_TOLERANCE_FACTOR']
                 
                 for cell in valid_cells:
                     cell_x, cell_y, cell_w, cell_h = cell
@@ -294,28 +347,39 @@ def detect_table_and_cells(image_path, name_list=None):
                                 (102, 255, 255), 1)  # Light yellow in BGR format
                 
                 # Function to highlight a column with a specific color
-                def highlight_column(column_cells, color):
+                def highlight_column(column_cells, color, column_number):
                     # Sort cells by y-coordinate (top to bottom)
                     sorted_cells = sorted(column_cells, key=lambda cell: cell[1])
-                    # Skip the header (first row) when highlighting
+                    
+                    # Write column number at the top of the column
+                    if sorted_cells:
+                        cell_x, cell_y, cell_w, cell_h = sorted_cells[0]  # Get first cell position
+                        text_x = x + cell_x + cell_w // 2 - 10  # Center the number
+                        text_y = y + cell_y - 10  # Place above the column
+                        # Add black outline for better visibility
+                        cv2.putText(output_image, str(column_number), (text_x, text_y),
+                                   cv2.FONT_HERSHEY_SIMPLEX, CONFIG['TEXT_SCALE'], (0, 0, 0), CONFIG['TEXT_THICKNESS'])
+                        # Add white text
+                        cv2.putText(output_image, str(column_number), (text_x, text_y),
+                                   cv2.FONT_HERSHEY_SIMPLEX, CONFIG['TEXT_SCALE'], (255, 255, 255), 1)
+                    
+                    # Rest of the highlight_column function remains the same
                     for cell in sorted_cells[1:]:
                         cell_x, cell_y, cell_w, cell_h = cell
-                        # Draw colored rectangle
                         cv2.rectangle(output_image, 
                                     (x + cell_x, y + cell_y), 
                                     (x + cell_x + cell_w, y + cell_y + cell_h), 
                                     color, 2)
                         
-                        # Add semi-transparent overlay
                         overlay = output_image.copy()
                         cv2.rectangle(overlay, 
                                     (x + cell_x, y + cell_y), 
                                     (x + cell_x + cell_w, y + cell_y + cell_h), 
                                     color, -1)
-                        cv2.addWeighted(overlay, 0.2, output_image, 0.8, 0, output_image)
+                        cv2.addWeighted(overlay, CONFIG['OVERLAY_ALPHA'], output_image, 1 - CONFIG['OVERLAY_ALPHA'], 0, output_image)
 
-                        # For the last column (signature column), add text annotation
-                        if color == (0, 0, 255):  # Red color = signature column
+                        # For the signature column (last column), add text annotation
+                        if column_number == len(sorted_columns):  # If it's the last column
                             signature_info = check_for_signature(
                                 image,
                                 x + cell_x,
@@ -323,24 +387,28 @@ def detect_table_and_cells(image_path, name_list=None):
                                 cell_w,
                                 cell_h
                             )
-                            # Add text annotation with color based on signature status
                             text = "Signed" if signature_info["has_content"] else "Empty"
-                            text_color = (0, 255, 0) if signature_info["has_content"] else (0, 0, 255)  # Green for signed, Red for empty
-                            text_x = x + cell_x + cell_w + 5  # 5 pixels padding
-                            text_y = y + cell_y + cell_h // 2  # Vertically centered
+                            text_color = (0, 255, 0) if signature_info["has_content"] else (0, 0, 255)
+                            text_x = x + cell_x + cell_w + 5
+                            text_y = y + cell_y + cell_h // 2
                             
-                            # Add black outline for better visibility
                             cv2.putText(output_image, text, (text_x, text_y), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)  # Black outline
-                            # Add colored text
+                                       cv2.FONT_HERSHEY_SIMPLEX, CONFIG['SIGNATURE_TEXT_SCALE'], (0, 0, 0), 2)
                             cv2.putText(output_image, text, (text_x, text_y), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, text_color, 1)  # Colored text overlay
+                                       cv2.FONT_HERSHEY_SIMPLEX, CONFIG['SIGNATURE_TEXT_SCALE'], text_color, 1)
+
+                # Modify the column detection logic
+                if len(sorted_columns) > 0:
+                    # Process all columns
+                    for idx, (col_x, col_cells) in enumerate(sorted_columns, 1):
+                        color = (255, 0, 0) if idx == 1 else (0, 0, 255) if idx == len(sorted_columns) else (128, 128, 128)  # Blue for names, Red for signatures, Gray for others
+                        highlight_column(col_cells, color, idx)
                 
                 # Highlight the second column if it exists
                 if len(sorted_columns) > 1:
                     second_column = sorted_columns[1][1]
                     print(f"Highlighting {len(second_column)-1} cells in the second column (excluding header)")
-                    highlight_column(second_column, (255, 0, 0))  # Blue for second column
+                    highlight_column(second_column, (255, 0, 0), 2)  # Blue for second column
                     
                     # Sort cells by y-coordinate (top to bottom)
                     sorted_cells = sorted(second_column, key=lambda cell: cell[1])
@@ -378,7 +446,7 @@ def detect_table_and_cells(image_path, name_list=None):
                 if len(sorted_columns) > 0:
                     last_column = sorted_columns[-1][1]
                     print(f"Highlighting {len(last_column)-1} cells in the last column (excluding header)")
-                    highlight_column(last_column, (0, 0, 255))  # Red for last column
+                    highlight_column(last_column, (0, 0, 255), len(sorted_columns))  # Red for last column
                     
                     # Sort cells in last column by y-coordinate (top to bottom)
                     last_column.sort(key=lambda cell: cell[1])
