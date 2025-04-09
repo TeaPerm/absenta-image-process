@@ -30,27 +30,36 @@ CONFIG = {
     
     # Signature detection
     'BORDER_WIDTH': 5,            # Border width to ignore in signature detection
-    'INK_CONTENT_THRESHOLD': 0.005,  # Threshold for determining if cell has ink content
-    'EMPTY_CELL_THRESHOLD': 0.002,   # Threshold for determining if cell is empty
-    'HIGH_INK_THRESHOLD': 0.02,      # Threshold for high ink content
+    'MIN_SIGNATURE_AREA': 50,     # Minimum area of signature components
+    'MIN_SIGNATURE_WIDTH': 15,    # Minimum width of signature
+    'MIN_SIGNATURE_HEIGHT': 8,    # Minimum height of signature
+    'MIN_WHITE_PIXELS': 30,       # Minimum number of white pixels to consider as signature
+    'MIN_SIGNATURE_DENSITY': 0.005, # Minimum density of white pixels (0.5%)
+    'MAX_SIGNATURE_DENSITY': 0.4,  # Maximum density to avoid detecting filled regions (40%)
+    'WHITE_THRESHOLD': 160,       # Threshold for white pixels (0-255)
     
     # Table detection
     'HORIZONTAL_KERNEL_SIZES': [20, 30, 40],  # Kernel sizes for horizontal line detection
     'VERTICAL_KERNEL_SIZES': [20, 30, 40],    # Kernel sizes for vertical line detection
-    'TABLE_MIN_WIDTH_FACTOR': 0.05,    # Minimum table width as factor of image width
-    'TABLE_MIN_HEIGHT_FACTOR': 0.05,   # Minimum table height as factor of image height
+    'TABLE_MIN_WIDTH_FACTOR': 0.1,    # Minimum table width as factor of image width
+    'TABLE_MIN_HEIGHT_FACTOR': 0.1,   # Minimum table height as factor of image height
     'TABLE_EDGE_MARGIN': 5,            # Minimum distance from table to image edge
     
     # Cell detection
     'MIN_CELL_AREA_FACTOR': 0.005,     # Minimum cell area as percentage of table area
     'MIN_CELL_WIDTH': 5,               # Minimum cell width in pixels
     'MIN_CELL_HEIGHT': 5,              # Minimum cell height in pixels
-    'COLUMN_X_TOLERANCE_FACTOR': 0.01, # X-coordinate tolerance for column grouping as factor of table width
+    'COLUMN_X_TOLERANCE_FACTOR': 0.04, # X-coordinate tolerance for column grouping as factor of table width
+    
+    # Name column detection
+    'MIN_NAME_COLUMN_CELLS': 5,        # Minimum number of cells that should contain text in name column
+    'MIN_NAME_LENGTH': 4,              # Minimum length of text to consider as a name
+    'NAME_COLUMN_WIDTH_FACTOR': 0.2,   # Name column should be at least this wide relative to table width
     
     # Visualization
     'OVERLAY_ALPHA': 0.2,              # Alpha transparency for cell highlighting
     'TEXT_SCALE': 0.7,                 # Scale for column number text
-    'TEXT_THICKNESS': 2,               # Thickness for text outline
+    'TEXT_THICKNESS': 3,               # Thickness for text outline
     'SIGNATURE_TEXT_SCALE': 0.5,       # Scale for signature status text
 }
 
@@ -101,65 +110,158 @@ def preprocess_image(image):
     return thresh
 
 def check_for_signature(image, x, y, w, h):
-    # Extract the cell region from the original image
+    """Detect signatures based on white text patterns on dark background."""
+    # Extract the cell region
     cell_region = image[y:y+h, x:x+w]
     
-    # Create a mask for blue/black colors
-    # Convert to HSV for better color detection
-    hsv = cv2.cvtColor(cell_region, cv2.COLOR_BGR2HSV)
+    # Convert to grayscale if not already
+    if len(cell_region.shape) == 3:
+        gray = cv2.cvtColor(cell_region, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = cell_region
     
-    # Blue mask (pen ink)
-    lower_blue = np.array([100, 50, 50])
-    upper_blue = np.array([130, 255, 255])
-    blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
-    
-    # Dark mask (black ink)
-    lower_black = np.array([0, 0, 0])
-    upper_black = np.array([180, 255, 30])
-    black_mask = cv2.inRange(hsv, lower_black, upper_black)
-    
-    # Combine blue and black masks
-    ink_mask = cv2.bitwise_or(blue_mask, black_mask)
-    
-    # Create a mask to ignore the cell borders
-    border_mask = np.ones_like(ink_mask)
+    # Create border mask to ignore cell borders
+    border_mask = np.ones_like(gray)
     border_width = CONFIG['BORDER_WIDTH']
-    border_mask[0:border_width, :] = 0  # Top border
-    border_mask[-border_width:, :] = 0  # Bottom border
-    border_mask[:, 0:border_width] = 0  # Left border
-    border_mask[:, -border_width:] = 0  # Right border
+    border_mask[0:border_width, :] = 0
+    border_mask[-border_width:, :] = 0
+    border_mask[:, 0:border_width] = 0
+    border_mask[:, -border_width:] = 0
+    
+    # Invert the image since we have white text on black background
+    gray = cv2.bitwise_not(gray)
+    
+    # Apply adaptive thresholding to handle varying brightness
+    binary = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        11,  # Block size
+        2    # C constant
+    )
     
     # Apply the border mask
-    ink_mask = ink_mask * border_mask
+    binary = binary * border_mask
     
-    # Calculate the percentage of ink pixels
-    ink_pixels = np.count_nonzero(ink_mask)
-    total_pixels = np.count_nonzero(border_mask)
-    pixel_density = ink_pixels / total_pixels if total_pixels > 0 else 0
+    # Remove noise
+    kernel = np.ones((2,2), np.uint8)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
     
-    # Get thresholds from config
-    content_threshold = CONFIG['INK_CONTENT_THRESHOLD']
-    empty_threshold = CONFIG['EMPTY_CELL_THRESHOLD']
-    high_ink_threshold = CONFIG['HIGH_INK_THRESHOLD']
+    # Find contours of potential signature components
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    # Calculate confidence level based on pixel density
-    if pixel_density < empty_threshold:  # Very few ink pixels
-        confidence = 0.9  # Very confident it's empty
-    elif pixel_density > high_ink_threshold:  # Lots of ink pixels
-        confidence = 0.9  # Very confident it has content
+    # Filter and analyze contours
+    valid_components = []
+    total_signature_area = 0
+    min_x, min_y = w, h
+    max_x, max_y = 0, 0
+    
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < CONFIG['MIN_SIGNATURE_AREA']:
+            continue
+            
+        x_c, y_c, w_c, h_c = cv2.boundingRect(contour)
+        
+        # Skip if the component touches the border (likely a cell border)
+        if x_c <= border_width or y_c <= border_width or \
+           x_c + w_c >= w - border_width or y_c + h_c >= h - border_width:
+            continue
+        
+        # Update signature bounds
+        min_x = min(min_x, x_c)
+        min_y = min(min_y, y_c)
+        max_x = max(max_x, x_c + w_c)
+        max_y = max(max_y, y_c + h_c)
+        
+        total_signature_area += area
+        valid_components.append(contour)
+    
+    # Calculate signature metrics
+    if valid_components:
+        signature_width = max_x - min_x
+        signature_height = max_y - min_y
+        
+        # Count white pixels in the original grayscale image
+        white_mask = (gray > CONFIG['WHITE_THRESHOLD']) & (border_mask > 0)
+        white_pixels = np.count_nonzero(white_mask)
+        total_pixels = np.count_nonzero(border_mask)
+        pixel_density = white_pixels / total_pixels if total_pixels > 0 else 0
+        
+        # Determine if this is a valid signature
+        has_signature = (
+            len(valid_components) >= 1 and
+            signature_width >= CONFIG['MIN_SIGNATURE_WIDTH'] and
+            signature_height >= CONFIG['MIN_SIGNATURE_HEIGHT'] and
+            white_pixels >= CONFIG['MIN_WHITE_PIXELS'] and
+            CONFIG['MIN_SIGNATURE_DENSITY'] <= pixel_density <= CONFIG['MAX_SIGNATURE_DENSITY']
+        )
+        
+        # Calculate confidence based on signature characteristics
+        confidence = min(0.9, (
+            (signature_width / w) * 0.3 +  # Width contribution
+            (signature_height / h) * 0.2 +  # Height contribution
+            (len(valid_components) / 3) * 0.2 +  # Number of components
+            (pixel_density / CONFIG['MIN_SIGNATURE_DENSITY']) * 0.3  # Density contribution
+        ))
     else:
-        # For densities in between, confidence scales with distance from thresholds
-        confidence = 0.5 + min(
-            abs(pixel_density - empty_threshold) / (high_ink_threshold - empty_threshold),
-            abs(pixel_density - high_ink_threshold) / (high_ink_threshold - empty_threshold)
-        ) * 0.4
+        has_signature = False
+        confidence = 0.9  # High confidence that it's empty
+        pixel_density = 0
+        white_pixels = 0
+        signature_width = 0
+        signature_height = 0
     
-    # Consider it signed if more than threshold of pixels are ink colored
     return {
-        "has_content": pixel_density > content_threshold,
+        "has_content": has_signature,
         "confidence": round(confidence, 2),
-        "pixel_density": round(pixel_density, 4)
+        "pixel_density": round(pixel_density, 4),
+        "debug_info": {
+            "num_components": len(valid_components),
+            "white_pixels": white_pixels,
+            "signature_width": signature_width,
+            "signature_height": signature_height,
+            "bounds": (min_x, min_y, max_x, max_y) if valid_components else None,
+            "valid_components": valid_components
+        }
     }
+
+def highlight_signature(image, x, y, w, h, signature_info):
+    """Highlight signature in the output image."""
+    if signature_info["has_content"]:
+        # Get signature bounds
+        bounds = signature_info["debug_info"]["bounds"]
+        if bounds:
+            min_x, min_y, max_x, max_y = bounds
+            
+            # Create a semi-transparent overlay
+            overlay = image.copy()
+            cv2.rectangle(overlay, 
+                        (x + min_x, y + min_y), 
+                        (x + max_x, y + max_y), 
+                        (0, 255, 0), 2)  # Green rectangle around signature
+            
+            # Draw contours
+            for contour in signature_info["debug_info"]["valid_components"]:
+                # Adjust contour coordinates
+                contour = contour + np.array([[x, y]])
+                cv2.drawContours(overlay, [contour], -1, (0, 255, 0), 1)
+            
+            # Apply the overlay
+            cv2.addWeighted(overlay, 0.3, image, 0.7, 0, image)
+            
+            # Add text annotation
+            confidence = signature_info["confidence"]
+            text = f"Signed ({confidence:.2f})"
+            text_x = x + 5
+            text_y = y + h - 5
+            
+            # Draw text with outline for better visibility
+            cv2.putText(image, text, (text_x, text_y),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 2)  # Black outline
+            cv2.putText(image, text, (text_x, text_y),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)  # Green text
 
 def clean_extracted_name(text):
     # More aggressive cleaning
@@ -378,8 +480,74 @@ def detect_table_and_cells(image_path, name_list=None):
                                     color, -1)
                         cv2.addWeighted(overlay, CONFIG['OVERLAY_ALPHA'], output_image, 1 - CONFIG['OVERLAY_ALPHA'], 0, output_image)
 
-                        # For the signature column (last column), add text annotation
-                        if column_number == len(sorted_columns):  # If it's the last column
+                # Process all columns
+                if len(sorted_columns) > 0:
+                    # Identify the names column
+                    names_column_idx = identify_names_column(sorted_columns, image, x, y, w, h)
+                    if names_column_idx is not None:
+                        print(f"Identified names column at index {names_column_idx + 1}")
+                    else:
+                        print("Could not identify names column, using default second column")
+                        names_column_idx = 1 if len(sorted_columns) > 1 else 0
+                    
+                    # Get the names column and signature column (last column)
+                    names_column = sorted_columns[names_column_idx][1]
+                    signature_column = sorted_columns[-1][1] if len(sorted_columns) > names_column_idx else []
+                    
+                    # Sort both columns by y-coordinate
+                    names_column.sort(key=lambda cell: cell[1])
+                    signature_column.sort(key=lambda cell: cell[1])
+                    
+                    # Skip headers
+                    names_cells = names_column[1:] if len(names_column) > 0 else []
+                    signature_cells = signature_column[1:] if len(signature_column) > 0 else []
+                    
+                    # Determine the number of rows we should have
+                    num_rows = max(len(names_cells), len(signature_cells))
+                    print(f"Found {len(names_cells)} name cells and {len(signature_cells)} signature cells")
+                    print(f"Using {num_rows} as the total number of rows")
+                    
+                    # Initialize results
+                    results["students"] = []
+                    student_names = {}
+                    
+                    # Process each row
+                    for i in range(num_rows):
+                        # Get name cell if available
+                        name = "Unknown"
+                        if i < len(names_cells):
+                            cell = names_cells[i]
+                            cell_x, cell_y, cell_w, cell_h = cell
+                            extracted_name = extract_text_from_cell(
+                                image,
+                                x + cell_x,
+                                y + cell_y,
+                                cell_w,
+                                cell_h
+                            )
+                            if extracted_name:
+                                if name_list:
+                                    # Try to match with provided name list
+                                    matched_name = find_matching_name(extracted_name, name_list)
+                                    if matched_name:
+                                        name = matched_name
+                                        print(f"{i+1}. {extracted_name} -> {matched_name}")
+                                    else:
+                                        name = extracted_name
+                                        print(f"{i+1}. {extracted_name} (no match found)")
+                                else:
+                                    name = extracted_name
+                                    print(f"{i+1}. {extracted_name}")
+                        
+                        # Get signature cell if available
+                        signature_info = {
+                            "has_content": False,
+                            "confidence": 0.9,
+                            "pixel_density": 0.0
+                        }
+                        if i < len(signature_cells):
+                            cell = signature_cells[i]
+                            cell_x, cell_y, cell_w, cell_h = cell
                             signature_info = check_for_signature(
                                 image,
                                 x + cell_x,
@@ -387,94 +555,44 @@ def detect_table_and_cells(image_path, name_list=None):
                                 cell_w,
                                 cell_h
                             )
-                            text = "Signed" if signature_info["has_content"] else "Empty"
-                            text_color = (0, 255, 0) if signature_info["has_content"] else (0, 0, 255)
-                            text_x = x + cell_x + cell_w + 5
-                            text_y = y + cell_y + cell_h // 2
-                            
-                            cv2.putText(output_image, text, (text_x, text_y), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, CONFIG['SIGNATURE_TEXT_SCALE'], (0, 0, 0), 2)
-                            cv2.putText(output_image, text, (text_x, text_y), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, CONFIG['SIGNATURE_TEXT_SCALE'], text_color, 1)
-
-                # Modify the column detection logic
-                if len(sorted_columns) > 0:
-                    # Process all columns
-                    for idx, (col_x, col_cells) in enumerate(sorted_columns, 1):
-                        color = (255, 0, 0) if idx == 1 else (0, 0, 255) if idx == len(sorted_columns) else (128, 128, 128)  # Blue for names, Red for signatures, Gray for others
-                        highlight_column(col_cells, color, idx)
-                
-                # Highlight the second column if it exists
-                if len(sorted_columns) > 1:
-                    second_column = sorted_columns[1][1]
-                    print(f"Highlighting {len(second_column)-1} cells in the second column (excluding header)")
-                    highlight_column(second_column, (255, 0, 0), 2)  # Blue for second column
-                    
-                    # Sort cells by y-coordinate (top to bottom)
-                    sorted_cells = sorted(second_column, key=lambda cell: cell[1])
-                    
-                    # Extract student names (skip header)
-                    print("\nStudent Names:")
-                    print("-" * 20)
-                    # Store names for later use
-                    student_names = {}
-                    for i, cell in enumerate(sorted_cells[1:], 1):
-                        cell_x, cell_y, cell_w, cell_h = cell
-                        name = extract_text_from_cell(
-                            image,
-                            x + cell_x,
-                            y + cell_y,
-                            cell_w,
-                            cell_h
-                        )
-                        if name:  # Only store if we found text
-                            if name_list:
-                                # Try to match with provided name list
-                                matched_name = find_matching_name(name, name_list)
-                                if matched_name:
-                                    student_names[i] = matched_name
-                                    print(f"{i}. {name} -> {matched_name}")  # Show the replacement
-                                else:
-                                    student_names[i] = name
-                                    print(f"{i}. {name} (no match found)")
-                            else:
-                                student_names[i] = name
-                                print(f"{i}. {name}")
-                    print("-" * 20)
-                
-                # Process and highlight the last column if it exists
-                if len(sorted_columns) > 0:
-                    last_column = sorted_columns[-1][1]
-                    print(f"Highlighting {len(last_column)-1} cells in the last column (excluding header)")
-                    highlight_column(last_column, (0, 0, 255), len(sorted_columns))  # Red for last column
-                    
-                    # Sort cells in last column by y-coordinate (top to bottom)
-                    last_column.sort(key=lambda cell: cell[1])
-                    
-                    # Skip the header row and check each cell in the last column for signatures
-                    for i, cell in enumerate(last_column[1:], start=1):  # Start from second cell
-                        cell_x, cell_y, cell_w, cell_h = cell
-                        signature_info = check_for_signature(
-                            image,
-                            x + cell_x,
-                            y + cell_y,
-                            cell_w,
-                            cell_h
-                        )
                         
-                        # Add result to the dictionary
+                        # Add result for this row
                         results["students"].append({
-                            "row_number": i,  # Add row number to results
-                            "name": student_names.get(i, "Unknown"),
+                            "row_number": i + 1,
+                            "name": name,
                             "has_signed": signature_info["has_content"],
                             "confidence": signature_info["confidence"],
                             "pixel_density": signature_info["pixel_density"]
                         })
                         
-                        # Print debug information
-                        print(f"Row {i}: {'Signed' if signature_info['has_content'] else 'Empty'} "
-                              f"(Confidence: {signature_info['confidence']:.2f}, "
-                              f"Density: {signature_info['pixel_density']:.4f})")
+                        # Store name for later use
+                        student_names[i + 1] = name
+                    
+                    # Process all columns for visualization
+                    for idx, (col_x, col_cells) in enumerate(sorted_columns, 1):
+                        color = (255, 0, 0) if idx == names_column_idx + 1 else (0, 0, 255) if idx == len(sorted_columns) else (128, 128, 128)
+                        highlight_column(col_cells, color, idx)
+                        
+                        # If this is the signature column, highlight detected signatures
+                        if idx == len(sorted_columns):
+                            for cell in col_cells[1:]:  # Skip header
+                                cell_x, cell_y, cell_w, cell_h = cell
+                                signature_info = check_for_signature(
+                                    image,
+                                    x + cell_x,
+                                    y + cell_y,
+                                    cell_w,
+                                    cell_h
+                                )
+                                if signature_info["has_content"]:
+                                    highlight_signature(
+                                        output_image,
+                                        x + cell_x,
+                                        y + cell_y,
+                                        cell_w,
+                                        cell_h,
+                                        signature_info
+                                    )
 
     # Save to a fixed output file
     output_path = os.path.join(DEBUG_FOLDER, 'output_table.jpg')
@@ -497,6 +615,46 @@ def read_names_from_file(file_path):
     except Exception as e:
         print(f"Error reading names file: {str(e)}")
         return None
+
+def identify_names_column(sorted_columns, image, x, y, w, h):
+    """Identify which column contains the names by analyzing text content and column characteristics."""
+    best_column_idx = None
+    best_score = -1
+    
+    for idx, (col_x, col_cells) in enumerate(sorted_columns):
+        # Sort cells by y-coordinate (top to bottom)
+        sorted_cells = sorted(col_cells, key=lambda cell: cell[1])
+        
+        # Skip if column has too few cells
+        if len(sorted_cells) < CONFIG['MIN_NAME_COLUMN_CELLS']:
+            continue
+            
+        # Calculate column width
+        col_width = max(cell[0] + cell[2] for cell in sorted_cells) - min(cell[0] for cell in sorted_cells)
+        
+        # Skip if column is too narrow
+        if col_width < w * CONFIG['NAME_COLUMN_WIDTH_FACTOR']:
+            continue
+        
+        # Count cells with text content
+        text_cells = 0
+        total_text_length = 0
+        
+        for cell in sorted_cells[1:]:  # Skip header
+            cell_x, cell_y, cell_w, cell_h = cell
+            text = extract_text_from_cell(image, x + cell_x, y + cell_y, cell_w, cell_h)
+            if text and len(text) >= CONFIG['MIN_NAME_LENGTH']:
+                text_cells += 1
+                total_text_length += len(text)
+        
+        # Calculate score based on text content
+        if text_cells > 0:
+            score = (text_cells / len(sorted_cells)) * (total_text_length / (text_cells * CONFIG['MIN_NAME_LENGTH']))
+            if score > best_score:
+                best_score = score
+                best_column_idx = idx
+    
+    return best_column_idx
 
 if __name__ == "__main__":
     # Set up argument parser
