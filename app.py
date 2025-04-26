@@ -33,16 +33,16 @@ def process_table():
         
         if 'image' not in request.files:
             print("No image in request")  # Debug print
-            return jsonify({'error': 'No image file provided'}), 400
+            return jsonify({'message': 'Nincs képfájl megadva'}), 400
         
         file = request.files['image']
         print(f"Received file: {file.filename}")  # Debug print
         
         if file.filename == '':
-            return jsonify({'error': 'No file selected'}), 400
+            return jsonify({'message': 'Nincs fájl kiválasztva'}), 400
             
         if not allowed_file(file.filename):
-            return jsonify({'error': 'File type not allowed'}), 400
+            return jsonify({'message': 'Nem támogatott fájltípus'}), 400
             
         name_list = None
         if 'names' in request.form:
@@ -50,16 +50,24 @@ def process_table():
                 name_list = json.loads(request.form['names'])
                 print(f"Received {len(name_list)} names")  # Debug print
             except json.JSONDecodeError:
-                return jsonify({'error': 'Invalid names format'}), 400
+                return jsonify({'message': 'Érvénytelen névlista formátum'}), 400
             
         filename = secure_filename(file.filename)
         filepath = os.path.join(UPLOAD_FOLDER, filename)
         file.save(filepath)
         print(f"Saved file to: {filepath}")  # Debug print
         
-        detect_table_and_cells(filepath, name_list)
+        # Call the detect_table_and_cells function and get both image and results
+        _, results = detect_table_and_cells(filepath, name_list)
         print("Image processed successfully")  # Debug print
         
+        # Check if there's an error in the results
+        if results and 'message' in results:
+            print(f"Error in processing: {results['message']}")
+            os.remove(filepath)  # Clean up the uploaded file
+            return jsonify(results), 400  # Return the error with 400 Bad Request status
+            
+        # If no error in results, use the saved JSON file
         with open('result.json', 'r', encoding='utf-8') as f:
             results = json.load(f)
             
@@ -70,7 +78,7 @@ def process_table():
         
     except Exception as e:
         print(f"Error occurred: {str(e)}")  # Debug print
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'message': f'Hiba történt: {str(e)}'}), 500
 
 if __name__ == '__main__':
     print("Starting server on port 5000...")  # Debug print

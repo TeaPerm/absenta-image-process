@@ -259,243 +259,238 @@ def extract_text_from_cell(image, x, y, w, h):
     return clean_extracted_name(text)
 
 def detect_table_and_cells(image_path, name_list=None):
-    image = cv2.imread(image_path)
-    if image is None:
-        raise ValueError("Could not read the image. Please check the file path.")
+    try:
+        image = cv2.imread(image_path)
+        if image is None:
+            raise ValueError("Could not read the image. Please check the file path.")
 
-    output_image = image.copy()
+        output_image = image.copy()
 
-    thresh = preprocess_image(image)
-    
-    height, width = thresh.shape[:2]
-    print(f"Image dimensions: {width}x{height}")
-    
-    cv2.imwrite(os.path.join(DEBUG_FOLDER, 'preprocessed.jpg'), thresh)
-    print(f"Saved preprocessed image as {os.path.join(DEBUG_FOLDER, 'preprocessed.jpg')}")
-    
-    results = {
-        "students": []  # Changed to list for cleaner output
-    }
-    
-    horizontal_lines = np.zeros_like(thresh)
-    for kernel_size in CONFIG['HORIZONTAL_KERNEL_SIZES']:
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, 1))
-        lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-        horizontal_lines = cv2.bitwise_or(horizontal_lines, lines)
-
-    vertical_lines = np.zeros_like(thresh)
-    for kernel_size in CONFIG['VERTICAL_KERNEL_SIZES']:
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, kernel_size))
-        lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-        vertical_lines = cv2.bitwise_or(vertical_lines, lines)
-
-    # Combine horizontal and vertical lines
-    table_mask = cv2.addWeighted(horizontal_lines, 1, vertical_lines, 1, 0)
-    
-    kernel = np.ones((3,3), np.uint8)
-    table_mask = cv2.morphologyEx(table_mask, cv2.MORPH_CLOSE, kernel)
-    
-    cv2.imwrite(os.path.join(DEBUG_FOLDER, 'table_mask.jpg'), table_mask)
-    print(f"Saved table mask as {os.path.join(DEBUG_FOLDER, 'table_mask.jpg')}")
-    
-    contours, _ = cv2.findContours(table_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    print(f"Found {len(contours)} potential tables")
-
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)
-
-    for contour in contours:
-        x, y, w, h = cv2.boundingRect(contour)
+        thresh = preprocess_image(image)
         
-        min_width = width * CONFIG['TABLE_MIN_WIDTH_FACTOR']
-        min_height = height * CONFIG['TABLE_MIN_HEIGHT_FACTOR']
-        edge_margin = CONFIG['TABLE_EDGE_MARGIN']
+        height, width = thresh.shape[:2]
+        print(f"Image dimensions: {width}x{height}")
         
-        if (w > min_width and h > min_height and
-            x > edge_margin and y > edge_margin and
-            x + w < width - edge_margin and y + h < height - edge_margin):
+        cv2.imwrite(os.path.join(DEBUG_FOLDER, 'preprocessed.jpg'), thresh)
+        print(f"Saved preprocessed image as {os.path.join(DEBUG_FOLDER, 'preprocessed.jpg')}")
+        
+        results = {
+            "students": []  # Changed to list for cleaner output
+        }
+        
+        horizontal_lines = np.zeros_like(thresh)
+        for kernel_size in CONFIG['HORIZONTAL_KERNEL_SIZES']:
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, 1))
+            lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+            horizontal_lines = cv2.bitwise_or(horizontal_lines, lines)
+
+        vertical_lines = np.zeros_like(thresh)
+        for kernel_size in CONFIG['VERTICAL_KERNEL_SIZES']:
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, kernel_size))
+            lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+            vertical_lines = cv2.bitwise_or(vertical_lines, lines)
+
+        # Combine horizontal and vertical lines
+        table_mask = cv2.addWeighted(horizontal_lines, 1, vertical_lines, 1, 0)
+        
+        kernel = np.ones((3,3), np.uint8)
+        table_mask = cv2.morphologyEx(table_mask, cv2.MORPH_CLOSE, kernel)
+        
+        cv2.imwrite(os.path.join(DEBUG_FOLDER, 'table_mask.jpg'), table_mask)
+        print(f"Saved table mask as {os.path.join(DEBUG_FOLDER, 'table_mask.jpg')}")
+        
+        contours, _ = cv2.findContours(table_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        print(f"Found {len(contours)} potential tables")
+
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)
+
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
             
-            print(f"Processing table at position ({x}, {y}) with size {w}x{h}")
+            min_width = width * CONFIG['TABLE_MIN_WIDTH_FACTOR']
+            min_height = height * CONFIG['TABLE_MIN_HEIGHT_FACTOR']
+            edge_margin = CONFIG['TABLE_EDGE_MARGIN']
             
-            cv2.rectangle(output_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            
-            table_region = thresh[y:y+h, x:x+w]
-            
-            cv2.imwrite(os.path.join(DEBUG_FOLDER, 'table_region.jpg'), table_region)
-            print(f"Saved table region as {os.path.join(DEBUG_FOLDER, 'table_region.jpg')}")
-            
-            table_mask_region = table_mask[y:y+h, x:x+w]
-            
-            cell_contours, hierarchy = cv2.findContours(
-                table_mask_region, 
-                cv2.RETR_CCOMP, 
-                cv2.CHAIN_APPROX_SIMPLE
-            )
-            print(f"Found {len(cell_contours)} potential cells")
-            
-            valid_cells = []
-            min_cell_area = (w * h) * CONFIG['MIN_CELL_AREA_FACTOR']
-            min_cell_width = CONFIG['MIN_CELL_WIDTH']
-            min_cell_height = CONFIG['MIN_CELL_HEIGHT']
-            
-            for cell_contour in cell_contours:
-                area = cv2.contourArea(cell_contour)
-                if area < min_cell_area:
-                    continue
+            if (w > min_width and h > min_height and
+                x > edge_margin and y > edge_margin and
+                x + w < width - edge_margin and y + h < height - edge_margin):
+                
+                print(f"Processing table at position ({x}, {y}) with size {w}x{h}")
+                
+                cv2.rectangle(output_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                
+                table_region = thresh[y:y+h, x:x+w]
+                
+                cv2.imwrite(os.path.join(DEBUG_FOLDER, 'table_region.jpg'), table_region)
+                print(f"Saved table region as {os.path.join(DEBUG_FOLDER, 'table_region.jpg')}")
+                
+                table_mask_region = table_mask[y:y+h, x:x+w]
+                
+                cell_contours, hierarchy = cv2.findContours(
+                    table_mask_region, 
+                    cv2.RETR_CCOMP, 
+                    cv2.CHAIN_APPROX_SIMPLE
+                )
+                print(f"Found {len(cell_contours)} potential cells")
+                
+                valid_cells = []
+                min_cell_area = (w * h) * CONFIG['MIN_CELL_AREA_FACTOR']
+                min_cell_width = CONFIG['MIN_CELL_WIDTH']
+                min_cell_height = CONFIG['MIN_CELL_HEIGHT']
+                
+                for cell_contour in cell_contours:
+                    area = cv2.contourArea(cell_contour)
+                    if area < min_cell_area:
+                        continue
+                        
+                    cell_x, cell_y, cell_w, cell_h = cv2.boundingRect(cell_contour)
                     
-                cell_x, cell_y, cell_w, cell_h = cv2.boundingRect(cell_contour)
+                    if (cell_w > min_cell_width and cell_h > min_cell_height and
+                        cell_x >= 0 and cell_y >= 0 and 
+                        cell_x + cell_w <= w and cell_y + cell_h <= h):
+                        valid_cells.append((cell_x, cell_y, cell_w, cell_h))
                 
-                if (cell_w > min_cell_width and cell_h > min_cell_height and
-                    cell_x >= 0 and cell_y >= 0 and 
-                    cell_x + cell_w <= w and cell_y + cell_h <= h):
-                    valid_cells.append((cell_x, cell_y, cell_w, cell_h))
-            
-            print(f"Found {len(valid_cells)} valid cells")
-            
-            if len(valid_cells) > 0:
-                valid_cells.sort(key=lambda cell: cell[0])
+                print(f"Found {len(valid_cells)} valid cells")
                 
-                min_x = min(cell[0] for cell in valid_cells)
-                max_x = max(cell[0] + cell[2] for cell in valid_cells)
-                table_width = max_x - min_x if max_x > min_x else w
-                
-                columns = {}
-                tolerance = table_width * CONFIG['COLUMN_X_TOLERANCE_FACTOR']
-                
-                for cell in valid_cells:
-                    cell_x, cell_y, cell_w, cell_h = cell
-                    assigned = False
-                    for col_x in columns.keys():
-                        if abs(cell_x - col_x) < tolerance:
-                            columns[col_x].append(cell)
-                            assigned = True
-                            break
-                    if not assigned:
-                        columns[cell_x] = [cell]
-                
-                sorted_columns = sorted(columns.items(), key=lambda x: x[0])
-                print(f"Found {len(sorted_columns)} columns")
-                
-                for cell in valid_cells:
-                    cell_x, cell_y, cell_w, cell_h = cell
-                    cv2.rectangle(output_image, 
-                                (x + cell_x, y + cell_y), 
-                                (x + cell_x + cell_w, y + cell_y + cell_h), 
-                                (102, 255, 255), 1)  # Light yellow in BGR format
-                
-                def highlight_column(column_cells, color, column_number):
-                    sorted_cells = sorted(column_cells, key=lambda cell: cell[1])
+                if len(valid_cells) > 0:
+                    valid_cells.sort(key=lambda cell: cell[0])
                     
-                    if sorted_cells:
-                        cell_x, cell_y, cell_w, cell_h = sorted_cells[0]  # Get first cell position
-                        text_x = x + cell_x + cell_w // 2 - 10  # Center the number
-                        text_y = y + cell_y - 10  # Place above the column
-                        cv2.putText(output_image, str(column_number), (text_x, text_y),
-                                   cv2.FONT_HERSHEY_SIMPLEX, CONFIG['TEXT_SCALE'], (0, 0, 0), CONFIG['TEXT_THICKNESS'])
-                        cv2.putText(output_image, str(column_number), (text_x, text_y),
-                                   cv2.FONT_HERSHEY_SIMPLEX, CONFIG['TEXT_SCALE'], (255, 255, 255), 1)
+                    min_x = min(cell[0] for cell in valid_cells)
+                    max_x = max(cell[0] + cell[2] for cell in valid_cells)
+                    table_width = max_x - min_x if max_x > min_x else w
                     
-                    for cell in sorted_cells[1:]:
+                    columns = {}
+                    tolerance = table_width * CONFIG['COLUMN_X_TOLERANCE_FACTOR']
+                    
+                    for cell in valid_cells:
+                        cell_x, cell_y, cell_w, cell_h = cell
+                        assigned = False
+                        for col_x in columns.keys():
+                            if abs(cell_x - col_x) < tolerance:
+                                columns[col_x].append(cell)
+                                assigned = True
+                                break
+                        if not assigned:
+                            columns[cell_x] = [cell]
+                    
+                    sorted_columns = sorted(columns.items(), key=lambda x: x[0])
+                    print(f"Found {len(sorted_columns)} columns")
+                    
+                    for cell in valid_cells:
                         cell_x, cell_y, cell_w, cell_h = cell
                         cv2.rectangle(output_image, 
                                     (x + cell_x, y + cell_y), 
                                     (x + cell_x + cell_w, y + cell_y + cell_h), 
-                                    color, 2)
+                                    (102, 255, 255), 1)  # Light yellow in BGR format
+                    
+                    def highlight_column(column_cells, color, column_number):
+                        sorted_cells = sorted(column_cells, key=lambda cell: cell[1])
                         
-                        overlay = output_image.copy()
-                        cv2.rectangle(overlay, 
-                                    (x + cell_x, y + cell_y), 
-                                    (x + cell_x + cell_w, y + cell_y + cell_h), 
-                                    color, -1)
-                        cv2.addWeighted(overlay, CONFIG['OVERLAY_ALPHA'], output_image, 1 - CONFIG['OVERLAY_ALPHA'], 0, output_image)
-
-                if len(sorted_columns) > 0:
-                    names_column_idx = identify_names_column(sorted_columns, image, x, y, w, h)
-                    if names_column_idx is not None:
-                        print(f"Identified names column at index {names_column_idx + 1}")
-                    else:
-                        print("Could not identify names column, using default second column")
-                        names_column_idx = 1 if len(sorted_columns) > 1 else 0
-                    
-                    names_column = sorted_columns[names_column_idx][1]
-                    signature_column = sorted_columns[-1][1] if len(sorted_columns) > names_column_idx else []
-                    
-                    names_column.sort(key=lambda cell: cell[1])
-                    signature_column.sort(key=lambda cell: cell[1])
-                    
-                    # Skip headers
-                    names_cells = names_column[1:] if len(names_column) > 0 else []
-                    signature_cells = signature_column[1:] if len(signature_column) > 0 else []
-                    
-                    if len(names_cells) != len(signature_cells):
-                        raise ValueError(
-                            f"Mismatch between number of names ({len(names_cells)}) and "
-                            f"signature cells ({len(signature_cells)}). "
-                            f"Each student must have exactly one signature cell."
-                        )
-                    
-                    num_rows = len(names_cells)  # Now we know both columns have the same length
-                    print(f"Found {num_rows} rows (excluding header)")
-                    
-                    results["students"] = []
-                    student_names = {}
-                    
-                    for i in range(num_rows):
-                        name = "Unknown"
-                        if i < len(names_cells):
-                            cell = names_cells[i]
+                        if sorted_cells:
+                            cell_x, cell_y, cell_w, cell_h = sorted_cells[0]  # Get first cell position
+                            text_x = x + cell_x + cell_w // 2 - 10  # Center the number
+                            text_y = y + cell_y - 10  # Place above the column
+                            cv2.putText(output_image, str(column_number), (text_x, text_y),
+                                       cv2.FONT_HERSHEY_SIMPLEX, CONFIG['TEXT_SCALE'], (0, 0, 0), CONFIG['TEXT_THICKNESS'])
+                            cv2.putText(output_image, str(column_number), (text_x, text_y),
+                                       cv2.FONT_HERSHEY_SIMPLEX, CONFIG['TEXT_SCALE'], (255, 255, 255), 1)
+                        
+                        for cell in sorted_cells[1:]:
                             cell_x, cell_y, cell_w, cell_h = cell
-                            extracted_name = extract_text_from_cell(
-                                image,
-                                x + cell_x,
-                                y + cell_y,
-                                cell_w,
-                                cell_h
-                            )
-                            if extracted_name:
-                                if name_list:
-                                    matched_name = find_matching_name(extracted_name, name_list)
-                                    if matched_name:
-                                        name = matched_name
-                                        print(f"{i+1}. {extracted_name} -> {matched_name}")
+                            cv2.rectangle(output_image, 
+                                        (x + cell_x, y + cell_y), 
+                                        (x + cell_x + cell_w, y + cell_y + cell_h), 
+                                        color, 2)
+                                        
+                            overlay = output_image.copy()
+                            cv2.rectangle(overlay, 
+                                        (x + cell_x, y + cell_y), 
+                                        (x + cell_x + cell_w, y + cell_y + cell_h), 
+                                        color, -1)
+                            cv2.addWeighted(overlay, CONFIG['OVERLAY_ALPHA'], output_image, 1 - CONFIG['OVERLAY_ALPHA'], 0, output_image)
+
+                    if len(sorted_columns) > 0:
+                        names_column_idx = identify_names_column(sorted_columns, image, x, y, w, h)
+                        if names_column_idx is not None:
+                            print(f"Identified names column at index {names_column_idx + 1}")
+                        else:
+                            print("Could not identify names column, using default second column")
+                            names_column_idx = 1 if len(sorted_columns) > 1 else 0
+                        
+                        names_column = sorted_columns[names_column_idx][1]
+                        signature_column = sorted_columns[-1][1] if len(sorted_columns) > names_column_idx else []
+                        
+                        names_column.sort(key=lambda cell: cell[1])
+                        signature_column.sort(key=lambda cell: cell[1])
+                        
+                        # Skip headers
+                        names_cells = names_column[1:] if len(names_column) > 0 else []
+                        signature_cells = signature_column[1:] if len(signature_column) > 0 else []
+                        
+                        # Validate number of cells
+                        if len(names_cells) != len(signature_cells):
+                            error_message = f"Eltérés a nevek ({len(names_cells)}) és " \
+                                           f"az aláírás cellák ({len(signature_cells)}) száma között. " \
+                                           f"Minden hallgatóhoz pontosan egy aláírás cella szükséges."
+                            print(f"ERROR: {error_message}")
+                            # Instead of raising an exception, return an error message
+                            return None, {
+                                "message": error_message,
+                                "names_count": len(names_cells),
+                                "signatures_count": len(signature_cells)
+                            }
+                        
+                        # Validate detected names count against provided name list
+                        if name_list and len(names_cells) < len(name_list):
+                            error_message = f"Kevesebb név cella ({len(names_cells)}) található, mint " \
+                                           f"ahány név szerepel a hallgatói listában ({len(name_list)}). " \
+                                           f"Néhány hallgató hiányozhat a jelenléti ívről."
+                            print(f"ERROR: {error_message}")
+                            return None, {
+                                "message": error_message,
+                                "detected_names_count": len(names_cells),
+                                "provided_names_count": len(name_list)
+                            }
+                        
+                        # Determine the number of rows we should have
+                        num_rows = len(names_cells)  # Now we know both columns have the same length
+                        print(f"Found {num_rows} rows (excluding header)")
+                        
+                        results["students"] = []
+                        student_names = {}
+                        
+                        for i in range(num_rows):
+                            name = "Unknown"
+                            if i < len(names_cells):
+                                cell = names_cells[i]
+                                cell_x, cell_y, cell_w, cell_h = cell
+                                extracted_name = extract_text_from_cell(
+                                    image,
+                                    x + cell_x,
+                                    y + cell_y,
+                                    cell_w,
+                                    cell_h
+                                )
+                                if extracted_name:
+                                    if name_list:
+                                        matched_name = find_matching_name(extracted_name, name_list)
+                                        if matched_name:
+                                            name = matched_name
+                                            print(f"{i+1}. {extracted_name} -> {matched_name}")
+                                        else:
+                                            name = extracted_name
+                                            print(f"{i+1}. {extracted_name} (no match found)")
                                     else:
                                         name = extracted_name
-                                        print(f"{i+1}. {extracted_name} (no match found)")
-                                else:
-                                    name = extracted_name
-                                    print(f"{i+1}. {extracted_name}")
-                        
-                        signature_info = {
-                            "has_content": False,
-                            "confidence": 0.9,
-                            "pixel_density": 0.0
-                        }
-                        if i < len(signature_cells):
-                            cell = signature_cells[i]
-                            cell_x, cell_y, cell_w, cell_h = cell
-                            signature_info = check_for_signature(
-                                image,
-                                x + cell_x,
-                                y + cell_y,
-                                cell_w,
-                                cell_h
-                            )
-                        
-                        results["students"].append({
-                            "row_number": i + 1,
-                            "name": name,
-                            "has_signed": signature_info["has_content"],
-                            "confidence": signature_info["confidence"],
-                            "pixel_density": signature_info["pixel_density"]
-                        })
-                        
-                        student_names[i + 1] = name
-                    
-                    for idx, (col_x, col_cells) in enumerate(sorted_columns, 1):
-                        color = (255, 0, 0) if idx == names_column_idx + 1 else (0, 0, 255) if idx == len(sorted_columns) else (128, 128, 128)
-                        highlight_column(col_cells, color, idx)
-                        
-                        if idx == len(sorted_columns):
-                            for cell in col_cells[1:]:  # Skip header
+                                        print(f"{i+1}. {extracted_name}")
+                            
+                            signature_info = {
+                                "has_content": False,
+                                "confidence": 0.9,
+                                "pixel_density": 0.0
+                            }
+                            if i < len(signature_cells):
+                                cell = signature_cells[i]
                                 cell_x, cell_y, cell_w, cell_h = cell
                                 signature_info = check_for_signature(
                                     image,
@@ -504,15 +499,47 @@ def detect_table_and_cells(image_path, name_list=None):
                                     cell_w,
                                     cell_h
                                 )
-                                if signature_info["has_content"]:
-                                    highlight_signature(
-                                        output_image,
+                            
+                            results["students"].append({
+                                "row_number": i + 1,
+                                "name": name,
+                                "has_signed": signature_info["has_content"],
+                                "confidence": signature_info["confidence"],
+                                "pixel_density": signature_info["pixel_density"]
+                            })
+                            
+                            student_names[i + 1] = name
+                        
+                        for idx, (col_x, col_cells) in enumerate(sorted_columns, 1):
+                            color = (255, 0, 0) if idx == names_column_idx + 1 else (0, 0, 255) if idx == len(sorted_columns) else (128, 128, 128)
+                            highlight_column(col_cells, color, idx)
+                            
+                            if idx == len(sorted_columns):
+                                for cell in col_cells[1:]:  # Skip header
+                                    cell_x, cell_y, cell_w, cell_h = cell
+                                    signature_info = check_for_signature(
+                                        image,
                                         x + cell_x,
                                         y + cell_y,
                                         cell_w,
-                                        cell_h,
-                                        signature_info
+                                        cell_h
                                     )
+                                    if signature_info["has_content"]:
+                                        highlight_signature(
+                                            output_image,
+                                            x + cell_x,
+                                            y + cell_y,
+                                            cell_w,
+                                            cell_h,
+                                            signature_info
+                                        )
+
+    except Exception as e:
+        error_message = f"Hiba történt a kép feldolgozása során: {str(e)}"
+        print(f"ERROR: {error_message}")
+        return None, {
+            "message": error_message
+        }
 
     output_path = os.path.join(DEBUG_FOLDER, 'output_table.jpg')
     cv2.imwrite(output_path, output_image)
@@ -523,7 +550,7 @@ def detect_table_and_cells(image_path, name_list=None):
         json.dump(results, f, indent=2, ensure_ascii=False)
     print("Results saved to result.json")
 
-    return output_image
+    return output_image, results
 
 def read_names_from_file(file_path):
     try:
@@ -570,6 +597,7 @@ def identify_names_column(sorted_columns, image, x, y, w, h):
     return best_column_idx
 
 if __name__ == "__main__":
+    # Set up argument parser
     parser = argparse.ArgumentParser(description='Detect tables and cells in an image')
     parser.add_argument('image_path', help='Path to the input image')
     parser.add_argument('--names_file', help='Path to text file containing names (one per line)')
@@ -585,7 +613,7 @@ if __name__ == "__main__":
             else:
                 print("No names loaded from file, proceeding without name matching")
         
-        result = detect_table_and_cells(args.image_path, name_list)
+        result, _ = detect_table_and_cells(args.image_path, name_list)
         print("Table and cell detection completed successfully!")
     except Exception as e:
-        print(f"An error occurred: {str(e)}") 
+        print(f"Hiba történt: {str(e)}") 
