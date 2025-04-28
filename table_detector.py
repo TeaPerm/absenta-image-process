@@ -63,9 +63,57 @@ CONFIG = {
 }
 
 def string_similarity(a, b):
+    """Calculate string similarity between two strings using SequenceMatcher"""
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
+def name_similarity(name1, name2):
+    """Calculate similarity between two names, handling different formats and order of parts"""
+    # Clean and normalize both names
+    name1 = clean_extracted_name(name1.lower())
+    name2 = clean_extracted_name(name2.lower())
+    
+    # If either name is empty, return 0
+    if not name1 or not name2:
+        return 0.0
+    
+    # Direct similarity
+    direct_similarity = string_similarity(name1, name2)
+    
+    # Split into parts
+    parts1 = name1.split()
+    parts2 = name2.split()
+    
+    # If parts count is very different, reduce similarity score
+    parts_diff_penalty = 1.0
+    if abs(len(parts1) - len(parts2)) > 1:
+        parts_diff_penalty = 0.8
+    
+    # Calculate part-by-part similarity (works better for reversed name order)
+    best_part_matches = []
+    for part1 in parts1:
+        if len(part1) < 2:  # Skip very short parts (initials, etc.)
+            continue
+        best_match = 0.0
+        for part2 in parts2:
+            if len(part2) < 2:
+                continue
+            similarity = string_similarity(part1, part2)
+            best_match = max(best_match, similarity)
+        best_part_matches.append(best_match)
+    
+    # Average the best matches for each part
+    part_similarity = sum(best_part_matches) / len(best_part_matches) if best_part_matches else 0.0
+    
+    # Combine scores, giving more weight to direct similarity
+    combined_similarity = (direct_similarity * 0.6 + part_similarity * 0.4) * parts_diff_penalty
+    
+    return combined_similarity
+
 def find_matching_name(table_name, name_list, threshold=CONFIG['NAME_MATCH_THRESHOLD']):
+    """Find the best matching name from a list based on string similarity."""
+    if not table_name or not name_list:
+        return None
+    
     best_match = None
     best_ratio = 0
     
@@ -73,7 +121,7 @@ def find_matching_name(table_name, name_list, threshold=CONFIG['NAME_MATCH_THRES
     
     for name in name_list:
         clean_name = clean_extracted_name(name)
-        ratio = string_similarity(table_name, clean_name)
+        ratio = name_similarity(table_name, clean_name)
         if ratio > best_ratio and ratio >= threshold:
             best_ratio = ratio
             best_match = name  
@@ -405,26 +453,68 @@ def highlight_signature(image, x, y, w, h, signature_info):
                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)  # Red text
 
 def clean_extracted_name(text):
-    text = text.replace('|', '').replace('\\', '').replace('/', '')
-    text = text.replace('_', '').replace('=', '').replace('+', '')
+    """Clean and normalize extracted name text from OCR."""
+    if not text:
+        return ""
     
+    # Replace common OCR errors
+    text = text.replace('|', 'I').replace('1', 'I')
+    text = text.replace('0', 'O').replace('5', 'S')
+    
+    # Remove unwanted symbols
+    text = text.replace('\\', '').replace('/', '')
+    text = text.replace('_', '').replace('=', '').replace('+', '')
+    text = text.replace('@', '').replace('#', '').replace('$', '')
+    text = text.replace('%', '').replace('^', '').replace('*', '')
+    text = text.replace('(', '').replace(')', '').replace('{', '')
+    text = text.replace('}', '').replace('[', '').replace(']', '')
+    
+    # Remove digits
     text = ''.join(c for c in text if not c.isdigit())
     
+    # Keep only alphanumeric characters, spaces, and some punctuation
     text = ''.join(c for c in text if c.isalpha() or c.isspace() or c in '.-')
     
+    # Normalize whitespace
     text = ' '.join(text.split())
     text = text.strip('.-_ ')
     
+    # Filter out very short words (likely OCR errors)
     text = ' '.join(word for word in text.split() if len(word) > 1)
     
     return text
 
 def extract_text_from_cell(image, x, y, w, h):
+    """Extract text from a cell using OCR with multiple settings and pick best result."""
     cell_region = image[y:y+h, x:x+w]
     
+    # Convert to PIL Image
     cell_pil = Image.fromarray(cv2.cvtColor(cell_region, cv2.COLOR_BGR2RGB))
     
-    text = pytesseract.image_to_string(cell_pil, config='--psm 6').strip()
+    # Try different PSM modes for best results
+    psm_modes = [6, 7, 8]  # Different page segmentation modes
+    results = []
+    
+    for psm in psm_modes:
+        config = f'--psm {psm}'
+        text = pytesseract.image_to_string(cell_pil, config=config).strip()
+        cleaned_text = clean_extracted_name(text)
+        if cleaned_text:
+            results.append((cleaned_text, len(cleaned_text)))
+    
+    # Return the result with most characters if we have any results
+    if results:
+        results.sort(key=lambda x: x[1], reverse=True)
+        return results[0][0]
+    
+    # If no good results, try one more time with preprocessing
+    gray_cell = cv2.cvtColor(cell_region, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(gray_cell, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # Convert processed image to PIL
+    binary_pil = Image.fromarray(binary)
+    text = pytesseract.image_to_string(binary_pil, config='--psm 6').strip()
+    
     return clean_extracted_name(text)
 
 def detect_table_and_cells(image_path, name_list=None):
@@ -678,10 +768,16 @@ def detect_table_and_cells(image_path, name_list=None):
                         
                         results["students"] = []
                         student_names = {}
+                        extracted_names = []
+                        matched_names = []
+                        unmatched_extracted_names = []
+                        name_list_copy = name_list.copy() if name_list else []
                         
-                        # First pass: extract names
+                        # First pass: extract names and do initial matching
                         for i in range(num_rows):
-                            name = "Unknown"
+                            extracted_name = "Unknown"
+                            matched_name = None
+                            
                             if i < len(names_cells):
                                 cell = names_cells[i]
                                 cell_x, cell_y, cell_w, cell_h = cell
@@ -692,28 +788,58 @@ def detect_table_and_cells(image_path, name_list=None):
                                     cell_w,
                                     cell_h
                                 )
-                                if extracted_name:
-                                    if name_list:
-                                        matched_name = find_matching_name(extracted_name, name_list)
-                                        if matched_name:
-                                            name = matched_name
-                                            print(f"{i+1}. {extracted_name} -> {matched_name}")
-                                        else:
-                                            name = extracted_name
-                                            print(f"{i+1}. {extracted_name} (no match found)")
+                                extracted_names.append(extracted_name)
+                                
+                                if extracted_name and name_list:
+                                    matched_name = find_matching_name(extracted_name, name_list_copy)
+                                    if matched_name:
+                                        print(f"{i+1}. {extracted_name} -> {matched_name}")
+                                        matched_names.append(matched_name)
+                                        name_list_copy.remove(matched_name)  # Remove the matched name
                                     else:
-                                        name = extracted_name
-                                        print(f"{i+1}. {extracted_name}")
+                                        print(f"{i+1}. {extracted_name} (no match found)")
+                                        unmatched_extracted_names.append((i, extracted_name))
+                                elif extracted_name:
+                                    print(f"{i+1}. {extracted_name}")
                             
-                            student_names[i + 1] = name
-                            
-                            # Log to debug file
-                            with open(debug_log_path, 'a') as f:
-                                f.write(f"Row {i+1}: Name: {name}\n")
+                            # At this point, either matched_name has a value, or we need to use the extracted name
+                            if matched_name:
+                                student_names[i + 1] = matched_name
+                            else:
+                                student_names[i + 1] = extracted_name if extracted_name else "Unknown"
                         
-                        # Second pass: detect signatures and highlight cells
+                        # If we have unmatched extracted names and remaining names in the list, 
+                        # try to assign them in order
+                        if name_list and unmatched_extracted_names and name_list_copy:
+                            # Sort unmatched names by row index to maintain order
+                            unmatched_extracted_names.sort(key=lambda x: x[0])
+                            
+                            # Sort remaining names alphabetically if they aren't already
+                            name_list_copy.sort()
+                            
+                            # Log assignment attempt
+                            with open(debug_log_path, 'a') as f:
+                                f.write("Attempting to assign remaining names in alphabetical order\n")
+                                f.write(f"Unmatched rows: {[row for row, _ in unmatched_extracted_names]}\n")
+                                f.write(f"Remaining names: {name_list_copy}\n")
+                            
+                            # Assign in order
+                            for idx, (row_idx, _) in enumerate(unmatched_extracted_names):
+                                if idx < len(name_list_copy):
+                                    student_names[row_idx + 1] = name_list_copy[idx]
+                                    print(f"Assigned {name_list_copy[idx]} to row {row_idx+1} based on order")
+                                    
+                                    # Log assignment
+                                    with open(debug_log_path, 'a') as f:
+                                        f.write(f"Assigned {name_list_copy[idx]} to row {row_idx+1} based on order\n")
+                        
+                        # Second pass: detect signatures and create results
                         for i in range(num_rows):
                             name = student_names[i + 1]
+                            
+                            # Log name processing
+                            with open(debug_log_path, 'a') as f:
+                                f.write(f"Row {i+1}: Final name assignment: {name}\n")
                             
                             signature_info = {
                                 "has_content": False,
