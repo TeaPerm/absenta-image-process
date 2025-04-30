@@ -8,7 +8,7 @@ from table_detector import detect_table_and_cells
 test_cases = [
     # 1.
     {
-        "image_path": "test/example-2.jpeg",
+        "image_path": "test/example-3.jpeg",
         "names_list": [
             "Ablakos Zsiga",
             "Bajusz Rudi",

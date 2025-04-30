@@ -75,22 +75,18 @@ def name_similarity(name1, name2):
     if not name1 or not name2:
         return 0.0
     
-    # Direct similarity
     direct_similarity = string_similarity(name1, name2)
     
-    # Split into parts
     parts1 = name1.split()
     parts2 = name2.split()
     
-    # If parts count is very different, reduce similarity score
     parts_diff_penalty = 1.0
     if abs(len(parts1) - len(parts2)) > 1:
         parts_diff_penalty = 0.8
     
-    # Calculate part-by-part similarity (works better for reversed name order)
     best_part_matches = []
     for part1 in parts1:
-        if len(part1) < 2:  # Skip very short parts (initials, etc.)
+        if len(part1) < 2: 
             continue
         best_match = 0.0
         for part2 in parts2:
@@ -100,10 +96,8 @@ def name_similarity(name1, name2):
             best_match = max(best_match, similarity)
         best_part_matches.append(best_match)
     
-    # Average the best matches for each part
     part_similarity = sum(best_part_matches) / len(best_part_matches) if best_part_matches else 0.0
-    
-    # Combine scores, giving more weight to direct similarity
+
     combined_similarity = (direct_similarity * 0.6 + part_similarity * 0.4) * parts_diff_penalty
     
     return combined_similarity
@@ -184,7 +178,6 @@ def check_for_signature(image, x, y, w, h):
     else:
         gray = cell_region
     
-    # Perform quick empty cell check using histogram analysis
     hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
     total_pixels = np.sum(hist)
     bright_pixels = np.sum(hist[220:256])
@@ -193,17 +186,12 @@ def check_for_signature(image, x, y, w, h):
     bright_pixels_ratio = float(bright_pixels) / total_pixels if total_pixels > 0 else 0
     dark_pixels_ratio = float(dark_pixels) / total_pixels if total_pixels > 0 else 0
     
-    # Get average intensity and standard deviation of the cell
     avg_intensity = np.mean(gray)
     std_intensity = np.std(gray)
     
-    # Calculate noise level in the image - important for distinguishing between noise and signature
-    # Empty cells often have more uniform noise or compression artifacts with low standard deviation
     noise_level = std_intensity
     
-    # If the cell is >90% bright pixels or has very high average intensity, it's likely empty
     if bright_pixels_ratio > CONFIG['EMPTY_CELL_BRIGHTNESS'] or avg_intensity > 245:
-        # Log to detection log file
         with open(os.path.join(DEBUG_FOLDER, 'detection_log.txt'), 'a') as f:
             f.write(f"Cell {x},{y}: EMPTY (bright_pixels_ratio={bright_pixels_ratio:.4f}, avg_intensity={avg_intensity:.2f})\n")
             
@@ -233,51 +221,40 @@ def check_for_signature(image, x, y, w, h):
     border_mask[:, 0:border_width] = 0
     border_mask[:, -border_width:] = 0
     
-    # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to enhance contrast
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     gray_eq = clahe.apply(gray)
     
     # Apply bilateral filter to reduce noise while preserving edges (signatures)
-    # This helps reduce noise in empty cells that might contribute to false detections
     gray_filtered = cv2.bilateralFilter(gray_eq, 5, 50, 50)
     
-    # Invert for signature detection (signature = white, background = black)
     gray_inv = cv2.bitwise_not(gray_filtered)
     
-    # Apply threshold with OTSU method to find optimal threshold automatically
     _, binary_otsu = cv2.threshold(gray_inv, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     
-    # Apply adaptive thresholding as well
+    # Apply adaptive thresholding
     binary_adaptive = cv2.adaptiveThreshold(
         gray_inv,
         255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY,
-        11,  # Block size
-        2    # C constant
+        11,  
+        2    
     )
     
     # Combine both methods - take the intersection to reduce noise
     binary = cv2.bitwise_and(binary_otsu, binary_adaptive)
     
-    # Apply border mask
     binary = binary * border_mask
     
-    # Apply morphological operations to clean up the binary image
-    # First open to remove small noise
     kernel = np.ones((2,2), np.uint8)
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
     
-    # Remove very small isolated pixels that are likely noise rather than signature strokes
-    # This specifically helps with empty cells that have random noise
-    min_component_size = 10  # Minimum area in pixels
+    min_component_size = 10 
     
-    # Find all connected components and filter out small ones
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
     
-    # Create a clean binary image with small components removed
     filtered_binary = np.zeros_like(binary)
-    for i in range(1, num_labels):  # Skip background (label 0)
+    for i in range(1, num_labels):
         if stats[i, cv2.CC_STAT_AREA] >= min_component_size:
             filtered_binary[labels == i] = 255
     
@@ -291,7 +268,6 @@ def check_for_signature(image, x, y, w, h):
     min_x, min_y = w, h
     max_x, max_y = 0, 0
     
-    # Track stroke-like features
     stroke_like_count = 0
     max_stroke_len = 0
     total_perimeter = 0
@@ -307,23 +283,17 @@ def check_for_signature(image, x, y, w, h):
            x_c + w_c >= w - border_width or y_c + h_c >= h - border_width:
             continue
         
-        # Filter out very elongated shapes (likely table lines or artifacts)
         aspect_ratio = float(w_c) / h_c if h_c > 0 else 0
         if aspect_ratio > 8 or aspect_ratio < 0.1:
             continue
         
-        # Calculate perimeter (important for stroke analysis)
         perimeter = cv2.arcLength(contour, True)
         total_perimeter += perimeter
         
-        # Calculate shape complexity - helps identify handwritten strokes
-        # Real signatures have complex shapes with high perimeter-to-area ratio
         complexity = (perimeter * perimeter) / (4 * np.pi * area) if area > 0 else 0
         
-        # Check for stroke-like characteristics (high perimeter-to-area ratio)
         if complexity > 1.8:
             stroke_like_count += 1
-            # Estimate stroke length from perimeter
             stroke_len = perimeter / 2
             max_stroke_len = max(max_stroke_len, stroke_len)
         
@@ -349,24 +319,17 @@ def check_for_signature(image, x, y, w, h):
         active_pixels = np.count_nonzero(signature_mask)
         total_area = np.count_nonzero(border_mask)
         
-        # Calculate pixel density within signature region, not whole cell
+        # Calculate pixel density within signature region
         signature_region_mask = np.zeros_like(gray)
         signature_region_mask[min_y:max_y, min_x:max_x] = 1
         signature_region_mask = signature_region_mask & border_mask
         signature_region_area = np.count_nonzero(signature_region_mask)
         
-        # Calculate signature coverage - how much of the region is actually filled with strokes
         signature_coverage = active_pixels / signature_region_area if signature_region_area > 0 else 0
         
-        # White pixels in the signature region
         white_mask = (gray_inv > CONFIG['WHITE_THRESHOLD']) & signature_region_mask
         white_pixels = np.count_nonzero(white_mask)
         
-        # Instead of raw pixel density, calculate a normalized density 
-        # that takes into account image noise and contrast
-        # This helps differentiate between empty cell noise and real signature strokes
-        
-        # Get intensity statistics within the signature region for better noise filtering
         region_pixels = gray_inv[signature_region_mask > 0]
         if len(region_pixels) > 0:
             region_mean = np.mean(region_pixels)
@@ -375,50 +338,37 @@ def check_for_signature(image, x, y, w, h):
             region_mean = 0
             region_std = 0
         
-        # Calculate a normalized, noise-adjusted pixel density
-        # This helps ensure empty cells have consistently lower density
         if signature_region_area > 0 and region_std > 0:
-            # Consider only pixels that are significantly above the mean intensity level
-            # This helps filter out low-level noise common in empty cells
             signal_threshold = region_mean + 1.5 * region_std
             signal_mask = (gray_inv > signal_threshold) & signature_region_mask
             signal_pixels = np.count_nonzero(signal_mask)
             
-            # Normalize by region area
             pixel_density = signal_pixels / signature_region_area
             
-            # Apply adjustment based on stroke characteristics
-            # Empty cells generally lack continuous strokes
             stroke_adjustment = stroke_like_count * 0.01
             pixel_density = pixel_density + stroke_adjustment
         else:
             pixel_density = 0
         
-        # Calculate overall density
         overall_density = active_pixels / total_area if total_area > 0 else 0
         
-        # Stroke density (length of strokes per area) - useful for signature detection
         stroke_density = total_perimeter / total_area if total_area > 0 else 0
         
-        # Check for "too perfect" shapes (likely not signatures but artifacts)
+        # Check for "too perfect" shapes
         is_too_regular = False
         for contour in valid_components:
-            # Calculate solidity
             hull = cv2.convexHull(contour)
             hull_area = cv2.contourArea(hull)
             solidity = float(cv2.contourArea(contour)) / hull_area if hull_area > 0 else 0
             
-            # Calculate circularity
             perimeter = cv2.arcLength(contour, True)
             area = cv2.contourArea(contour)
             circularity = 4 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0
             
-            # Very regular shapes are likely not signatures
             if solidity > 0.98 or circularity > 0.9:
                 is_too_regular = True
                 break
         
-        # Calculate a more robust signature score that balances multiple factors
         signature_score = (
             min(1.0, max_stroke_len / 50) * 0.3 +         # Longest stroke length
             min(1.0, stroke_like_count / 3) * 0.2 +       # Number of stroke-like shapes
@@ -431,8 +381,8 @@ def check_for_signature(image, x, y, w, h):
             signature_width >= CONFIG['MIN_SIGNATURE_WIDTH'] and
             signature_height >= CONFIG['MIN_SIGNATURE_HEIGHT'] and
             white_pixels >= CONFIG['MIN_WHITE_PIXELS'] and
-            stroke_like_count >= 1 and                     # At least one stroke-like component
-            signature_score >= 0.3 and                     # Minimum overall signature score
+            stroke_like_count >= 1 and
+            signature_score >= 0.3 and
             not is_too_regular
         )
         
@@ -525,11 +475,10 @@ def highlight_signature(image, x, y, w, h, signature_info):
             density_text = f"Den: {pixel_density:.3f} Score: {signature_score:.2f}"
             comp_text = f"Comp: {components} Strokes: {stroke_components}"
             
-            # Position text at bottom of cell
             text_x = x + 5
-            text_y = y + h - 35  # First line
-            density_y = y + h - 20  # Second line
-            comp_y = y + h - 5  # Third line
+            text_y = y + h - 35
+            density_y = y + h - 20
+            comp_y = y + h - 5
             
             # Draw text with dark outline for better visibility
             cv2.putText(image, text, (text_x, text_y),
@@ -549,7 +498,6 @@ def highlight_signature(image, x, y, w, h, signature_info):
             cv2.putText(image, comp_text, (text_x, comp_y),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 0), 1)  # Green text
     else:
-        # For cells without signature, also show the detection metrics
         pixel_density = signature_info["pixel_density"]
         components = signature_info["debug_info"].get("num_components", 0)
         stroke_components = signature_info["debug_info"].get("stroke_components", 0)
@@ -560,7 +508,6 @@ def highlight_signature(image, x, y, w, h, signature_info):
         
         metrics_text = f"Den:{pixel_density:.3f} Sc:{signature_score:.2f} Cmp:{components}"
         
-        # Draw density with red color for non-signed cells
         cv2.putText(image, metrics_text, (text_x, text_y),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 0), 2)  # Black outline
         cv2.putText(image, metrics_text, (text_x, text_y),
@@ -571,11 +518,9 @@ def clean_extracted_name(text):
     if not text:
         return ""
     
-    # Replace common OCR errors
     text = text.replace('|', 'I').replace('1', 'I')
     text = text.replace('0', 'O').replace('5', 'S')
     
-    # Remove unwanted symbols
     text = text.replace('\\', '').replace('/', '')
     text = text.replace('_', '').replace('=', '').replace('+', '')
     text = text.replace('@', '').replace('#', '').replace('$', '')
@@ -583,17 +528,13 @@ def clean_extracted_name(text):
     text = text.replace('(', '').replace(')', '').replace('{', '')
     text = text.replace('}', '').replace('[', '').replace(']', '')
     
-    # Remove digits
     text = ''.join(c for c in text if not c.isdigit())
     
-    # Keep only alphanumeric characters, spaces, and some punctuation
     text = ''.join(c for c in text if c.isalpha() or c.isspace() or c in '.-')
     
-    # Normalize whitespace
     text = ' '.join(text.split())
     text = text.strip('.-_ ')
     
-    # Filter out very short words (likely OCR errors)
     text = ' '.join(word for word in text.split() if len(word) > 1)
     
     return text
@@ -602,25 +543,19 @@ def extract_text_from_cell(image, x, y, w, h):
     """Extract text from a cell using OCR with optimized settings for speed."""
     cell_region = image[y:y+h, x:x+w]
     
-    # Skip very small cells to save time
     if w < 20 or h < 10:
         return ""
     
-    # Convert to PIL Image
     cell_pil = Image.fromarray(cv2.cvtColor(cell_region, cv2.COLOR_BGR2RGB))
     
-    # Use single optimized OCR setting instead of multiple passes
     config = '--psm 6 --oem 3'
     text = pytesseract.image_to_string(cell_pil, config=config).strip()
     cleaned_text = clean_extracted_name(text)
     
-    # Only use preprocessing if no good text was found in the first attempt
     if not cleaned_text:
-        # Apply preprocessing to improve OCR results
         gray_cell = cv2.cvtColor(cell_region, cv2.COLOR_BGR2GRAY)
         _, binary = cv2.threshold(gray_cell, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         
-        # Convert processed image to PIL
         binary_pil = Image.fromarray(binary)
         text = pytesseract.image_to_string(binary_pil, config=config).strip()
         cleaned_text = clean_extracted_name(text)
@@ -643,7 +578,6 @@ def detect_table_and_cells(image_path, name_list=None):
         cv2.imwrite(os.path.join(DEBUG_FOLDER, 'preprocessed.jpg'), thresh)
         print(f"Saved preprocessed image as {os.path.join(DEBUG_FOLDER, 'preprocessed.jpg')}")
         
-        # Clear previous debug logs
         debug_log_path = os.path.join(DEBUG_FOLDER, 'detection_log.txt')
         with open(debug_log_path, 'w') as f:
             f.write(f"Starting detection on image: {image_path}\n")
@@ -651,7 +585,7 @@ def detect_table_and_cells(image_path, name_list=None):
             f.write("-" * 50 + "\n")
             
         results = {
-            "students": []  # Changed to list for cleaner output
+            "students": []
         }
         
         horizontal_lines = np.zeros_like(thresh)
@@ -666,7 +600,6 @@ def detect_table_and_cells(image_path, name_list=None):
             lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
             vertical_lines = cv2.bitwise_or(vertical_lines, lines)
 
-        # Combine horizontal and vertical lines
         table_mask = cv2.addWeighted(horizontal_lines, 1, vertical_lines, 1, 0)
         
         kernel = np.ones((3,3), np.uint8)
@@ -678,7 +611,6 @@ def detect_table_and_cells(image_path, name_list=None):
         contours, _ = cv2.findContours(table_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         print(f"Found {len(contours)} potential tables")
         
-        # Log to debug file
         with open(debug_log_path, 'a') as f:
             f.write(f"Found {len(contours)} potential tables\n")
 
@@ -697,7 +629,6 @@ def detect_table_and_cells(image_path, name_list=None):
                 
                 print(f"Processing table at position ({x}, {y}) with size {w}x{h}")
                 
-                # Log to debug file
                 with open(debug_log_path, 'a') as f:
                     f.write(f"Processing table at position ({x}, {y}) with size {w}x{h}\n")
                     f.write("-" * 40 + "\n")
@@ -737,7 +668,6 @@ def detect_table_and_cells(image_path, name_list=None):
                 
                 print(f"Found {len(valid_cells)} valid cells")
                 
-                # Log to debug file
                 with open(debug_log_path, 'a') as f:
                     f.write(f"Found {len(valid_cells)} valid cells\n")
                 
@@ -765,7 +695,6 @@ def detect_table_and_cells(image_path, name_list=None):
                     sorted_columns = sorted(columns.items(), key=lambda x: x[0])
                     print(f"Found {len(sorted_columns)} columns")
                     
-                    # Log to debug file
                     with open(debug_log_path, 'a') as f:
                         f.write(f"Found {len(sorted_columns)} columns\n")
                         f.write(f"Column positions: {[col[0] for col in sorted_columns]}\n")
@@ -810,13 +739,11 @@ def detect_table_and_cells(image_path, name_list=None):
                         if names_column_idx is not None:
                             print(f"Identified names column at index {names_column_idx + 1}")
                             
-                            # Log to debug file
                             with open(debug_log_path, 'a') as f:
                                 f.write(f"Identified names column at index {names_column_idx + 1}\n")
                         else:
                             print("Could not identify names column, using default second column")
                             
-                            # Log to debug file
                             with open(debug_log_path, 'a') as f:
                                 f.write("Could not identify names column, using default second column\n")
                                 
@@ -839,32 +766,13 @@ def detect_table_and_cells(image_path, name_list=None):
                                            f"Minden hallgatóhoz pontosan egy aláírás cella szükséges."
                             print(f"ERROR: {error_message}")
                             
-                            # Log to debug file
                             with open(debug_log_path, 'a') as f:
                                 f.write(f"ERROR: {error_message}\n")
                                 
-                            # Instead of raising an exception, return an error message
                             return None, {
                                 "message": error_message,
                                 "names_count": len(names_cells),
                                 "signatures_count": len(signature_cells)
-                            }
-                        
-                        # Validate detected names count against provided name list
-                        if name_list and len(names_cells) < len(name_list):
-                            error_message = f"Kevesebb név cella ({len(names_cells)}) található, mint " \
-                                           f"ahány név szerepel a hallgatói listában ({len(name_list)}). " \
-                                           f"Néhány hallgató hiányozhat a jelenléti ívről."
-                            print(f"ERROR: {error_message}")
-                            
-                            # Log to debug file
-                            with open(debug_log_path, 'a') as f:
-                                f.write(f"ERROR: {error_message}\n")
-                                
-                            return None, {
-                                "message": error_message,
-                                "detected_names_count": len(names_cells),
-                                "provided_names_count": len(name_list)
                             }
                         
                         # Determine the number of rows we should have
@@ -879,69 +787,80 @@ def detect_table_and_cells(image_path, name_list=None):
                         results["students"] = []
                         student_names = {}
                         extracted_names = []
-                        matched_names = []
-                        unmatched_extracted_names = []
-                        name_list_copy = name_list.copy() if name_list else []
                         
-                        # First pass: extract names and do initial matching
-                        for i in range(num_rows):
-                            extracted_name = "Unknown"
-                            matched_name = None
-                            
-                            if i < len(names_cells):
-                                cell = names_cells[i]
-                                cell_x, cell_y, cell_w, cell_h = cell
-                                extracted_name = extract_text_from_cell(
-                                    image,
-                                    x + cell_x,
-                                    y + cell_y,
-                                    cell_w,
-                                    cell_h
-                                )
-                                extracted_names.append(extracted_name)
-                                
-                                if extracted_name and name_list:
-                                    matched_name = find_matching_name(extracted_name, name_list_copy)
-                                    if matched_name:
-                                        print(f"{i+1}. {extracted_name} -> {matched_name}")
-                                        matched_names.append(matched_name)
-                                        name_list_copy.remove(matched_name)  # Remove the matched name
-                                    else:
-                                        print(f"{i+1}. {extracted_name} (no match found)")
-                                        unmatched_extracted_names.append((i, extracted_name))
-                                elif extracted_name:
-                                    print(f"{i+1}. {extracted_name}")
-                            
-                            # At this point, either matched_name has a value, or we need to use the extracted name
-                            if matched_name:
-                                student_names[i + 1] = matched_name
-                            else:
-                                student_names[i + 1] = extracted_name if extracted_name else "Unknown"
-                        
-                        # If we have unmatched extracted names and remaining names in the list, 
-                        # try to assign them in order
-                        if name_list and unmatched_extracted_names and name_list_copy:
-                            # Sort unmatched names by row index to maintain order
-                            unmatched_extracted_names.sort(key=lambda x: x[0])
-                            
-                            # Sort remaining names alphabetically if they aren't already
-                            name_list_copy.sort()
-                            
-                            # Log assignment attempt
+                        # Fast name assignment - use the provided name list in order if available
+                        if name_list and len(name_list) >= num_rows:
+                            # Simply assign names in order from the list
+                            print("Using provided name list in order for fast assignment")
                             with open(debug_log_path, 'a') as f:
-                                f.write("Attempting to assign remaining names in alphabetical order\n")
-                                f.write(f"Unmatched rows: {[row for row, _ in unmatched_extracted_names]}\n")
-                                f.write(f"Remaining names: {name_list_copy}\n")
+                                f.write("Using provided name list in order for fast assignment\n")
                             
-                            # Assign in order
-                            for idx, (row_idx, _) in enumerate(unmatched_extracted_names):
-                                if idx < len(name_list_copy):
-                                    student_names[row_idx + 1] = name_list_copy[idx]
-                                    print(f"Assigned {name_list_copy[idx]} to row {row_idx+1} based on order")
+                            for i in range(num_rows):
+                                student_names[i + 1] = name_list[i]
+                                print(f"{i+1}. {name_list[i]} (assigned by order)")
+                                with open(debug_log_path, 'a') as f:
+                                    f.write(f"Row {i+1}: Assigned {name_list[i]} by order\n")
+                        else:
+                            # If no name list or not enough names, try OCR with basic matching
+                            print("No complete name list provided, performing OCR detection")
+                            with open(debug_log_path, 'a') as f:
+                                f.write("No complete name list provided, performing OCR detection\n")
+                            
+                            matched_names = []
+                            unmatched_extracted_names = []
+                            name_list_copy = name_list.copy() if name_list else []
+                            
+                            # First pass: extract names and do initial matching
+                            for i in range(num_rows):
+                                extracted_name = "Unknown"
+                                matched_name = None
+                                
+                                if i < len(names_cells):
+                                    cell = names_cells[i]
+                                    cell_x, cell_y, cell_w, cell_h = cell
+                                    extracted_name = extract_text_from_cell(
+                                        image,
+                                        x + cell_x,
+                                        y + cell_y,
+                                        cell_w,
+                                        cell_h
+                                    )
+                                    extracted_names.append(extracted_name)
                                     
-                                    # Log assignment
+                                    if extracted_name and name_list_copy:
+                                        matched_name = find_matching_name(extracted_name, name_list_copy)
+                                        if matched_name:
+                                            print(f"{i+1}. {extracted_name} -> {matched_name}")
+                                            matched_names.append(matched_name)
+                                            name_list_copy.remove(matched_name)  # Remove the matched name
+                                        else:
+                                            print(f"{i+1}. {extracted_name} (no match found)")
+                                            unmatched_extracted_names.append((i, extracted_name))
+                                    elif extracted_name:
+                                        print(f"{i+1}. {extracted_name}")
+                                        unmatched_extracted_names.append((i, extracted_name))
+                                
+                                # At this point, either matched_name has a value, or we need to use the extracted name
+                                if matched_name:
+                                    student_names[i + 1] = matched_name
+                                elif name_list_copy and i < len(name_list) - len(matched_names):
+                                    # Assign the next available name from the list if we couldn't match
+                                    next_name = name_list_copy[0]
+                                    student_names[i + 1] = next_name
+                                    name_list_copy.remove(next_name)
+                                    print(f"{i+1}. Assigned next available name: {next_name}")
+                                else:
+                                    # As a last resort, use the extracted name or a generic placeholder
+                                    student_names[i + 1] = extracted_name if extracted_name and extracted_name != "Unknown" else f"Student {i+1}"
+                            
+                            # If we still have unmatched cells and remaining names, assign in order
+                            remaining_indices = [i+1 for i in range(num_rows) if i+1 not in student_names]
+                            for idx, cell_idx in enumerate(remaining_indices):
+                                if name_list_copy and idx < len(name_list_copy):
+                                    student_names[cell_idx] = name_list_copy[idx]
+                                    print(f"Assigned {name_list_copy[idx]} to row {cell_idx} based on order")
                                     with open(debug_log_path, 'a') as f:
-                                        f.write(f"Assigned {name_list_copy[idx]} to row {row_idx+1} based on order\n")
+                                        f.write(f"Assigned {name_list_copy[idx]} to row {cell_idx} based on order\n")
                         
                         # Second pass: detect signatures and create results
                         for i in range(num_rows):
@@ -968,14 +887,12 @@ def detect_table_and_cells(image_path, name_list=None):
                                     cell_h
                                 )
                                 
-                                # Log signature detection results
                                 with open(debug_log_path, 'a') as f:
                                     f.write(f"Row {i+1}: Signature detection: " + 
                                           f"has_signature={signature_info['has_content']}, " +
                                           f"confidence={signature_info['confidence']}, " +
                                           f"pixel_density={signature_info['pixel_density']}\n")
                                 
-                                # Always highlight the signature cell with density information
                                 highlight_signature(
                                     output_image,
                                     x + cell_x,
@@ -993,7 +910,6 @@ def detect_table_and_cells(image_path, name_list=None):
                                 "pixel_density": signature_info["pixel_density"]
                             })
                         
-                        # Log results summary
                         with open(debug_log_path, 'a') as f:
                             f.write("-" * 40 + "\n")
                             f.write("Detection Summary:\n")
@@ -1011,7 +927,6 @@ def detect_table_and_cells(image_path, name_list=None):
         error_message = f"Hiba történt a kép feldolgozása során: {str(e)}"
         print(f"ERROR: {error_message}")
         
-        # Log error to debug file
         with open(debug_log_path if 'debug_log_path' in locals() else os.path.join(DEBUG_FOLDER, 'error_log.txt'), 'a') as f:
             f.write(f"ERROR: {error_message}\n")
             import traceback
@@ -1025,17 +940,16 @@ def detect_table_and_cells(image_path, name_list=None):
     cv2.imwrite(output_path, output_image)
     print(f"Processed image saved as: {output_path}")
     
-    # Save results to JSON file
-    with open('result.json', 'w', encoding='utf-8') as f:
+    result_path = os.path.join(DEBUG_FOLDER, 'result.json')
+    with open(result_path, 'w', encoding='utf-8') as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
-    print("Results saved to result.json")
+    print(f"Results saved to {result_path}")
 
     return output_image, results
 
 def read_names_from_file(file_path):
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
-            # Read lines and remove empty lines and whitespace
             names = [line.strip() for line in f.readlines() if line.strip()]
         return names
     except Exception as e:
@@ -1061,7 +975,7 @@ def identify_names_column(sorted_columns, image, x, y, w, h):
         text_cells = 0
         total_text_length = 0
         
-        for cell in sorted_cells[1:]:  # Skip header
+        for cell in sorted_cells[1:]:
             cell_x, cell_y, cell_w, cell_h = cell
             text = extract_text_from_cell(image, x + cell_x, y + cell_y, cell_w, cell_h)
             if text and len(text) >= CONFIG['MIN_NAME_LENGTH']:
@@ -1077,14 +991,13 @@ def identify_names_column(sorted_columns, image, x, y, w, h):
     return best_column_idx
 
 if __name__ == "__main__":
-    # Set up argument parser
+    
     parser = argparse.ArgumentParser(description='Detect tables and cells in an image')
     parser.add_argument('image_path', help='Path to the input image')
     parser.add_argument('--names_file', help='Path to text file containing names (one per line)')
     args = parser.parse_args()
 
     try:
-        # Read names from file if provided
         name_list = None
         if args.names_file:
             name_list = read_names_from_file(args.names_file)
