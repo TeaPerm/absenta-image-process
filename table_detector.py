@@ -184,14 +184,6 @@ def check_for_signature(image, x, y, w, h):
     else:
         gray = cell_region
     
-    # Create debug directory if needed
-    debug_dir = os.path.join(DEBUG_FOLDER, 'signature_debug')
-    if not os.path.exists(debug_dir):
-        os.makedirs(debug_dir)
-    
-    # Save original cell for debugging
-    cv2.imwrite(os.path.join(debug_dir, f'cell_{x}_{y}_original.jpg'), cell_region)
-    
     # Perform quick empty cell check using histogram analysis
     hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
     total_pixels = np.sum(hist)
@@ -205,10 +197,12 @@ def check_for_signature(image, x, y, w, h):
     avg_intensity = np.mean(gray)
     std_intensity = np.std(gray)
     
+    # Calculate noise level in the image - important for distinguishing between noise and signature
+    # Empty cells often have more uniform noise or compression artifacts with low standard deviation
+    noise_level = std_intensity
+    
     # If the cell is >90% bright pixels or has very high average intensity, it's likely empty
     if bright_pixels_ratio > CONFIG['EMPTY_CELL_BRIGHTNESS'] or avg_intensity > 245:
-        cv2.imwrite(os.path.join(debug_dir, f'cell_{x}_{y}_empty.jpg'), gray)
-        
         # Log to detection log file
         with open(os.path.join(DEBUG_FOLDER, 'detection_log.txt'), 'a') as f:
             f.write(f"Cell {x},{y}: EMPTY (bright_pixels_ratio={bright_pixels_ratio:.4f}, avg_intensity={avg_intensity:.2f})\n")
@@ -225,7 +219,9 @@ def check_for_signature(image, x, y, w, h):
                 "bounds": None,
                 "valid_components": [],
                 "bright_pixels_ratio": bright_pixels_ratio,
-                "avg_intensity": avg_intensity
+                "avg_intensity": avg_intensity,
+                "std_intensity": std_intensity,
+                "noise_level": noise_level
             }
         }
     
@@ -241,17 +237,18 @@ def check_for_signature(image, x, y, w, h):
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     gray_eq = clahe.apply(gray)
     
-    # Save contrast enhanced image for debugging
-    cv2.imwrite(os.path.join(debug_dir, f'cell_{x}_{y}_enhanced.jpg'), gray_eq)
+    # Apply bilateral filter to reduce noise while preserving edges (signatures)
+    # This helps reduce noise in empty cells that might contribute to false detections
+    gray_filtered = cv2.bilateralFilter(gray_eq, 5, 50, 50)
     
     # Invert for signature detection (signature = white, background = black)
-    gray_inv = cv2.bitwise_not(gray_eq)
+    gray_inv = cv2.bitwise_not(gray_filtered)
     
-    # Save inverted image for debugging
-    cv2.imwrite(os.path.join(debug_dir, f'cell_{x}_{y}_inverted.jpg'), gray_inv)
+    # Apply threshold with OTSU method to find optimal threshold automatically
+    _, binary_otsu = cv2.threshold(gray_inv, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     
-    # Apply binary thresholding
-    binary = cv2.adaptiveThreshold(
+    # Apply adaptive thresholding as well
+    binary_adaptive = cv2.adaptiveThreshold(
         gray_inv,
         255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -260,31 +257,44 @@ def check_for_signature(image, x, y, w, h):
         2    # C constant
     )
     
+    # Combine both methods - take the intersection to reduce noise
+    binary = cv2.bitwise_and(binary_otsu, binary_adaptive)
+    
     # Apply border mask
     binary = binary * border_mask
     
-    # Save binary image for debugging
-    cv2.imwrite(os.path.join(debug_dir, f'cell_{x}_{y}_binary.jpg'), binary)
-    
     # Apply morphological operations to clean up the binary image
+    # First open to remove small noise
     kernel = np.ones((2,2), np.uint8)
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
     
-    # Save cleaned binary for debugging
-    cv2.imwrite(os.path.join(debug_dir, f'cell_{x}_{y}_cleaned.jpg'), binary)
+    # Remove very small isolated pixels that are likely noise rather than signature strokes
+    # This specifically helps with empty cells that have random noise
+    min_component_size = 10  # Minimum area in pixels
+    
+    # Find all connected components and filter out small ones
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    
+    # Create a clean binary image with small components removed
+    filtered_binary = np.zeros_like(binary)
+    for i in range(1, num_labels):  # Skip background (label 0)
+        if stats[i, cv2.CC_STAT_AREA] >= min_component_size:
+            filtered_binary[labels == i] = 255
+    
+    binary = filtered_binary
     
     # Find contours
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    # Draw contours image for debugging
-    contour_image = np.zeros_like(binary)
-    cv2.drawContours(contour_image, contours, -1, 255, 1)
-    cv2.imwrite(os.path.join(debug_dir, f'cell_{x}_{y}_contours.jpg'), contour_image)
     
     valid_components = []
     total_signature_area = 0
     min_x, min_y = w, h
     max_x, max_y = 0, 0
+    
+    # Track stroke-like features
+    stroke_like_count = 0
+    max_stroke_len = 0
+    total_perimeter = 0
     
     for contour in contours:
         area = cv2.contourArea(contour)
@@ -302,6 +312,21 @@ def check_for_signature(image, x, y, w, h):
         if aspect_ratio > 8 or aspect_ratio < 0.1:
             continue
         
+        # Calculate perimeter (important for stroke analysis)
+        perimeter = cv2.arcLength(contour, True)
+        total_perimeter += perimeter
+        
+        # Calculate shape complexity - helps identify handwritten strokes
+        # Real signatures have complex shapes with high perimeter-to-area ratio
+        complexity = (perimeter * perimeter) / (4 * np.pi * area) if area > 0 else 0
+        
+        # Check for stroke-like characteristics (high perimeter-to-area ratio)
+        if complexity > 1.8:
+            stroke_like_count += 1
+            # Estimate stroke length from perimeter
+            stroke_len = perimeter / 2
+            max_stroke_len = max(max_stroke_len, stroke_len)
+        
         min_x = min(min_x, x_c)
         min_y = min(min_y, y_c)
         max_x = max(max_x, x_c + w_c)
@@ -312,11 +337,6 @@ def check_for_signature(image, x, y, w, h):
     
     # Calculate signature metrics
     if valid_components:
-        # Draw valid contours for debugging
-        valid_contour_image = np.zeros_like(binary)
-        cv2.drawContours(valid_contour_image, valid_components, -1, 255, 1)
-        cv2.imwrite(os.path.join(debug_dir, f'cell_{x}_{y}_valid_contours.jpg'), valid_contour_image)
-        
         signature_width = max_x - min_x
         signature_height = max_y - min_y
         
@@ -324,7 +344,6 @@ def check_for_signature(image, x, y, w, h):
         signature_mask = np.zeros_like(gray)
         cv2.drawContours(signature_mask, valid_components, -1, 255, -1)
         signature_mask = signature_mask & border_mask
-        cv2.imwrite(os.path.join(debug_dir, f'cell_{x}_{y}_signature_mask.jpg'), signature_mask)
         
         # Calculate active signature pixels and total area
         active_pixels = np.count_nonzero(signature_mask)
@@ -336,15 +355,50 @@ def check_for_signature(image, x, y, w, h):
         signature_region_mask = signature_region_mask & border_mask
         signature_region_area = np.count_nonzero(signature_region_mask)
         
+        # Calculate signature coverage - how much of the region is actually filled with strokes
+        signature_coverage = active_pixels / signature_region_area if signature_region_area > 0 else 0
+        
         # White pixels in the signature region
         white_mask = (gray_inv > CONFIG['WHITE_THRESHOLD']) & signature_region_mask
         white_pixels = np.count_nonzero(white_mask)
         
-        # Calculate density within signature region
-        pixel_density = white_pixels / signature_region_area if signature_region_area > 0 else 0
+        # Instead of raw pixel density, calculate a normalized density 
+        # that takes into account image noise and contrast
+        # This helps differentiate between empty cell noise and real signature strokes
+        
+        # Get intensity statistics within the signature region for better noise filtering
+        region_pixels = gray_inv[signature_region_mask > 0]
+        if len(region_pixels) > 0:
+            region_mean = np.mean(region_pixels)
+            region_std = np.std(region_pixels)
+        else:
+            region_mean = 0
+            region_std = 0
+        
+        # Calculate a normalized, noise-adjusted pixel density
+        # This helps ensure empty cells have consistently lower density
+        if signature_region_area > 0 and region_std > 0:
+            # Consider only pixels that are significantly above the mean intensity level
+            # This helps filter out low-level noise common in empty cells
+            signal_threshold = region_mean + 1.5 * region_std
+            signal_mask = (gray_inv > signal_threshold) & signature_region_mask
+            signal_pixels = np.count_nonzero(signal_mask)
+            
+            # Normalize by region area
+            pixel_density = signal_pixels / signature_region_area
+            
+            # Apply adjustment based on stroke characteristics
+            # Empty cells generally lack continuous strokes
+            stroke_adjustment = stroke_like_count * 0.01
+            pixel_density = pixel_density + stroke_adjustment
+        else:
+            pixel_density = 0
         
         # Calculate overall density
         overall_density = active_pixels / total_area if total_area > 0 else 0
+        
+        # Stroke density (length of strokes per area) - useful for signature detection
+        stroke_density = total_perimeter / total_area if total_area > 0 else 0
         
         # Check for "too perfect" shapes (likely not signatures but artifacts)
         is_too_regular = False
@@ -364,30 +418,41 @@ def check_for_signature(image, x, y, w, h):
                 is_too_regular = True
                 break
         
+        # Calculate a more robust signature score that balances multiple factors
+        signature_score = (
+            min(1.0, max_stroke_len / 50) * 0.3 +         # Longest stroke length
+            min(1.0, stroke_like_count / 3) * 0.2 +       # Number of stroke-like shapes
+            min(1.0, signature_coverage * 5) * 0.2 +     # Signature coverage
+            min(1.0, pixel_density * 10) * 0.3           # Adjusted pixel density
+        )
+        
         has_signature = (
             len(valid_components) >= CONFIG['MIN_VALID_COMPONENTS'] and
             signature_width >= CONFIG['MIN_SIGNATURE_WIDTH'] and
             signature_height >= CONFIG['MIN_SIGNATURE_HEIGHT'] and
             white_pixels >= CONFIG['MIN_WHITE_PIXELS'] and
-            pixel_density >= CONFIG['MIN_SIGNATURE_DENSITY'] and
-            overall_density < CONFIG['EMPTY_CELL_BRIGHTNESS'] and  # Avoid detecting filled areas
+            stroke_like_count >= 1 and                     # At least one stroke-like component
+            signature_score >= 0.3 and                     # Minimum overall signature score
             not is_too_regular
         )
         
         confidence = min(0.9, (
-            (signature_width / w) * 0.3 +  # Width contribution
+            (signature_width / w) * 0.2 +  # Width contribution
             (signature_height / h) * 0.2 +  # Height contribution
-            (len(valid_components) / 3) * 0.2 +  # Number of components
-            (pixel_density / CONFIG['MIN_SIGNATURE_DENSITY']) * 0.3  # Density contribution
+            (stroke_like_count / 3) * 0.3 +  # Number of stroke-like components
+            (signature_score) * 0.3  # Overall signature score
         ))
         
         # Record result for debugging
         result = "SIGNATURE" if has_signature else "NO_SIGNATURE"
-        with open(os.path.join(debug_dir, 'detection_log.txt'), 'a') as f:
+        with open(os.path.join(DEBUG_FOLDER, 'detection_log.txt'), 'a') as f:
             f.write(f"Cell {x},{y}: {result}, "
                    f"Components: {len(valid_components)}, "
+                   f"StrokeComponents: {stroke_like_count}, "
                    f"Size: {signature_width}x{signature_height}, "
                    f"Density: {pixel_density:.4f}, "
+                   f"StrokeDensity: {stroke_density:.4f}, "
+                   f"Score: {signature_score:.4f}, "
                    f"WhitePixels: {white_pixels}, "
                    f"Regular: {is_too_regular}\n")
     else:
@@ -399,9 +464,14 @@ def check_for_signature(image, x, y, w, h):
         signature_width = 0
         signature_height = 0
         is_too_regular = False
+        stroke_like_count = 0
+        stroke_density = 0
+        signature_score = 0
+        region_mean = 0
+        region_std = 0
         
         # Record empty result
-        with open(os.path.join(debug_dir, 'detection_log.txt'), 'a') as f:
+        with open(os.path.join(DEBUG_FOLDER, 'detection_log.txt'), 'a') as f:
             f.write(f"Cell {x},{y}: EMPTY (no valid components)\n")
     
     return {
@@ -409,15 +479,18 @@ def check_for_signature(image, x, y, w, h):
         "confidence": round(confidence, 2),
         "pixel_density": round(pixel_density, 4),
         "debug_info": {
-            "num_components": len(valid_components),
-            "white_pixels": white_pixels,
-            "signature_width": signature_width,
-            "signature_height": signature_height,
-            "bounds": (min_x, min_y, max_x, max_y) if valid_components else None,
-            "valid_components": valid_components,
+            "num_components": len(valid_components) if 'valid_components' in locals() else 0,
+            "stroke_components": stroke_like_count if 'stroke_like_count' in locals() else 0,
+            "white_pixels": white_pixels if 'white_pixels' in locals() else 0,
+            "signature_width": signature_width if 'signature_width' in locals() else 0,
+            "signature_height": signature_height if 'signature_height' in locals() else 0,
+            "signature_score": signature_score if 'signature_score' in locals() else 0,
+            "bounds": (min_x, min_y, max_x, max_y) if 'valid_components' in locals() and valid_components else None,
+            "valid_components": valid_components if 'valid_components' in locals() else [],
             "bright_pixels_ratio": bright_pixels_ratio if 'bright_pixels_ratio' in locals() else None,
             "overall_density": overall_density if 'overall_density' in locals() else None,
-            "is_too_regular": is_too_regular if 'is_too_regular' in locals() else None
+            "is_too_regular": is_too_regular if 'is_too_regular' in locals() else None,
+            "noise_level": noise_level
         }
     }
 
@@ -445,15 +518,18 @@ def highlight_signature(image, x, y, w, h, signature_info):
             confidence = signature_info["confidence"]
             pixel_density = signature_info["pixel_density"]
             components = signature_info["debug_info"]["num_components"]
+            stroke_components = signature_info["debug_info"].get("stroke_components", 0)
+            signature_score = signature_info["debug_info"].get("signature_score", 0)
             
             text = f"Signed ({confidence:.2f})"
-            density_text = f"Density: {pixel_density:.4f}"
-            comp_text = f"Components: {components}"
+            density_text = f"Den: {pixel_density:.3f} Score: {signature_score:.2f}"
+            comp_text = f"Comp: {components} Strokes: {stroke_components}"
             
             # Position text at bottom of cell
             text_x = x + 5
-            text_y = y + h - 25  # First line
-            density_y = y + h - 10  # Second line
+            text_y = y + h - 35  # First line
+            density_y = y + h - 20  # Second line
+            comp_y = y + h - 5  # Third line
             
             # Draw text with dark outline for better visibility
             cv2.putText(image, text, (text_x, text_y),
@@ -466,19 +542,28 @@ def highlight_signature(image, x, y, w, h, signature_info):
                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 2)  # Black outline
             cv2.putText(image, density_text, (text_x, density_y),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)  # Green text
+                       
+            # Draw components info
+            cv2.putText(image, comp_text, (text_x, comp_y),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 0), 2)  # Black outline
+            cv2.putText(image, comp_text, (text_x, comp_y),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 0), 1)  # Green text
     else:
-        # For cells without signature, also show the density
-        pixel_density = signature_info["pixel_density"] 
-        components = signature_info["debug_info"]["num_components"] if "num_components" in signature_info["debug_info"] else 0
+        # For cells without signature, also show the detection metrics
+        pixel_density = signature_info["pixel_density"]
+        components = signature_info["debug_info"].get("num_components", 0)
+        stroke_components = signature_info["debug_info"].get("stroke_components", 0)
+        signature_score = signature_info["debug_info"].get("signature_score", 0)
         
         text_x = x + 5
         text_y = y + h - 10
-        density_text = f"Den: {pixel_density:.4f}, Comp: {components}"
+        
+        metrics_text = f"Den:{pixel_density:.3f} Sc:{signature_score:.2f} Cmp:{components}"
         
         # Draw density with red color for non-signed cells
-        cv2.putText(image, density_text, (text_x, text_y),
+        cv2.putText(image, metrics_text, (text_x, text_y),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 0), 2)  # Black outline
-        cv2.putText(image, density_text, (text_x, text_y),
+        cv2.putText(image, metrics_text, (text_x, text_y),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)  # Red text
 
 def clean_extracted_name(text):
