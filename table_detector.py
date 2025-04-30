@@ -32,7 +32,6 @@ CONFIG = {
     'MIN_SIGNATURE_HEIGHT': 8,    # Minimum height of signature
     'MIN_WHITE_PIXELS': 30,       # Minimum number of white pixels to consider as signature
     'MIN_SIGNATURE_DENSITY': 0.04, # Minimum density of white pixels in signature region (4%)
-    'MAX_SIGNATURE_DENSITY': 1, # Maximum density to avoid detecting filled regions (50%)
     'WHITE_THRESHOLD': 170,       # Threshold for white pixels (0-255) - higher value is more strict
     'MIN_VALID_COMPONENTS': 1,    # Minimum number of valid components to consider as signature
     'EMPTY_CELL_BRIGHTNESS': 0.9, # Brightness threshold for empty cell detection (90% bright pixels)
@@ -110,7 +109,7 @@ def name_similarity(name1, name2):
     return combined_similarity
 
 def find_matching_name(table_name, name_list, threshold=CONFIG['NAME_MATCH_THRESHOLD']):
-    """Find the best matching name from a list based on string similarity."""
+    """Find the best matching name from a list based on string similarity with improved speed."""
     if not table_name or not name_list:
         return None
     
@@ -119,12 +118,38 @@ def find_matching_name(table_name, name_list, threshold=CONFIG['NAME_MATCH_THRES
     
     table_name = clean_extracted_name(table_name)
     
+    # Quick filter: If exact match exists, return immediately
     for name in name_list:
         clean_name = clean_extracted_name(name)
+        if table_name.lower() == clean_name.lower():
+            return name
+    
+    # For longer lists, first check if any name is contained within the table name
+    # This can be much faster than calculating similarity scores for all names
+    for name in name_list:
+        clean_name = clean_extracted_name(name).lower()
+        if len(clean_name) > 5 and clean_name in table_name.lower():
+            # If a substantial part of a name is found, prioritize it
+            ratio = 0.8  # High starting similarity
+            if ratio > best_ratio and ratio >= threshold:
+                best_ratio = ratio
+                best_match = name
+    
+    # If we found a good match with the quick check, return it
+    if best_match and best_ratio > 0.7:
+        return best_match
+    
+    # Otherwise do more comprehensive matching
+    for name in name_list:
+        clean_name = clean_extracted_name(name)
+        # Skip very short names for performance
+        if len(clean_name) < 3:
+            continue
+            
         ratio = name_similarity(table_name, clean_name)
         if ratio > best_ratio and ratio >= threshold:
             best_ratio = ratio
-            best_match = name  
+            best_match = name
     
     return best_match
 
@@ -169,11 +194,16 @@ def check_for_signature(image, x, y, w, h):
     
     # Perform quick empty cell check using histogram analysis
     hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
-    bright_pixels_ratio = float(sum(hist[220:256])) / sum(hist) if sum(hist) > 0 else 0
-    dark_pixels_ratio = float(sum(hist[0:50])) / sum(hist) if sum(hist) > 0 else 0
+    total_pixels = np.sum(hist)
+    bright_pixels = np.sum(hist[220:256])
+    dark_pixels = np.sum(hist[0:50])
     
-    # Get average intensity of the cell
+    bright_pixels_ratio = float(bright_pixels) / total_pixels if total_pixels > 0 else 0
+    dark_pixels_ratio = float(dark_pixels) / total_pixels if total_pixels > 0 else 0
+    
+    # Get average intensity and standard deviation of the cell
     avg_intensity = np.mean(gray)
+    std_intensity = np.std(gray)
     
     # If the cell is >90% bright pixels or has very high average intensity, it's likely empty
     if bright_pixels_ratio > CONFIG['EMPTY_CELL_BRIGHTNESS'] or avg_intensity > 245:
@@ -340,7 +370,6 @@ def check_for_signature(image, x, y, w, h):
             signature_height >= CONFIG['MIN_SIGNATURE_HEIGHT'] and
             white_pixels >= CONFIG['MIN_WHITE_PIXELS'] and
             pixel_density >= CONFIG['MIN_SIGNATURE_DENSITY'] and
-            pixel_density <= CONFIG['MAX_SIGNATURE_DENSITY'] and
             overall_density < CONFIG['EMPTY_CELL_BRIGHTNESS'] and  # Avoid detecting filled areas
             not is_too_regular
         )
@@ -485,37 +514,33 @@ def clean_extracted_name(text):
     return text
 
 def extract_text_from_cell(image, x, y, w, h):
-    """Extract text from a cell using OCR with multiple settings and pick best result."""
+    """Extract text from a cell using OCR with optimized settings for speed."""
     cell_region = image[y:y+h, x:x+w]
+    
+    # Skip very small cells to save time
+    if w < 20 or h < 10:
+        return ""
     
     # Convert to PIL Image
     cell_pil = Image.fromarray(cv2.cvtColor(cell_region, cv2.COLOR_BGR2RGB))
     
-    # Try different PSM modes for best results
-    psm_modes = [6, 7, 8]  # Different page segmentation modes
-    results = []
+    # Use single optimized OCR setting instead of multiple passes
+    config = '--psm 6 --oem 3'
+    text = pytesseract.image_to_string(cell_pil, config=config).strip()
+    cleaned_text = clean_extracted_name(text)
     
-    for psm in psm_modes:
-        config = f'--psm {psm}'
-        text = pytesseract.image_to_string(cell_pil, config=config).strip()
+    # Only use preprocessing if no good text was found in the first attempt
+    if not cleaned_text:
+        # Apply preprocessing to improve OCR results
+        gray_cell = cv2.cvtColor(cell_region, cv2.COLOR_BGR2GRAY)
+        _, binary = cv2.threshold(gray_cell, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # Convert processed image to PIL
+        binary_pil = Image.fromarray(binary)
+        text = pytesseract.image_to_string(binary_pil, config=config).strip()
         cleaned_text = clean_extracted_name(text)
-        if cleaned_text:
-            results.append((cleaned_text, len(cleaned_text)))
     
-    # Return the result with most characters if we have any results
-    if results:
-        results.sort(key=lambda x: x[1], reverse=True)
-        return results[0][0]
-    
-    # If no good results, try one more time with preprocessing
-    gray_cell = cv2.cvtColor(cell_region, cv2.COLOR_BGR2GRAY)
-    _, binary = cv2.threshold(gray_cell, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    
-    # Convert processed image to PIL
-    binary_pil = Image.fromarray(binary)
-    text = pytesseract.image_to_string(binary_pil, config='--psm 6').strip()
-    
-    return clean_extracted_name(text)
+    return cleaned_text
 
 def detect_table_and_cells(image_path, name_list=None):
     try:
